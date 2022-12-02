@@ -1,0 +1,23 @@
+# PASCAL VOC dataset http://host.robots.ox.ac.uk/pascal/VOC/
+# Train command: python train.py --data voc.yaml
+# Default dataset location is next to /yolov5:
+#   /parent_folder
+#     /VOC
+#     /yolov5
+
+
+# download command/URL (optional)
+#download: bash data/scripts/get_voc.sh
+
+# train and val data as 1) directory: path/images/, 2) file: path/images.txt, or 3) list: [path1/images/, path2/images/]
+#train: ../VOC3/images/fulltiff #f4k_original_training #f4k_original_training_ang # testangle_106 # xtrabbtestv2_tiff # xtrabbtrainv2_tiff
+#val: ../VOC3/images/tifftest #f4k_original_testing #f4k_original_testing_ang #f4k_repretrain_5frames_testing  # testangle_106 
+train: ../VOC3/images/f4kBIG_train_v3_repre  #testangle_106_2img  #xtrabb_training_v2 # # # 16551 images  
+val: ../VOC3/images/f4kBIG_val_v3_repre  #xtrabb_testing_v2 #xtrabb_testing_v2 # #   #f4k_repretrain_5frames_testing  # 4952 images
+test: ../VOC3/images/f4kBIG_test_v3_repre  #xtrabb_testing_v2 #xtrabb_testing_v2  #f4k_repretrain_5frames_testing
+
+# number of classes
+nc: 4
+
+# class names
+names: ['0', '1', '2', '3']
