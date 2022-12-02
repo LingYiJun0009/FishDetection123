@@ -53,20 +53,78 @@ def butter_lowpass_filtfilt(data, cutoff=1500, fs=50000, order=5):
     b, a = butter_lowpass(cutoff, fs, order=order)
     return filtfilt(b, a, data)  # forward-backward filter
 
+def calccoords(len, centerx, centery, rad, pred = False): # calculate coordinates given radians 25th Feb 2022
+    rad = (float(rad)) 
+    # "unnormalze angle"  (tolossangle+math.pi)/(math.pi*2)
+    if pred:
+      rad = (rad*(math.pi * 2)) - math.pi
+    x = centerx + (len*math.cos(rad))
+    y = centery + (len * math.sin(rad))
+    
+    return x,y
 
-def plot_one_box(x, img, color=None, label=None, line_thickness=None):
+def center(c1,c2): # 25th Feb 2022
+  cx = (c2[0] - c1[0])
+  cy = (c2[1] - c1[1])
+#  print("")
+#  print("center c1, c2")
+#  print(c1, c2)
+#  print(c2[0] - c1[0])
+#  print("")
+  return c1[0] + (cx/2), c1[1] + (cy/2)
+  
+def plot_one_box(x, img, color=None, label=None, line_thickness=None, angle = [], pred = False, whichclass = False ):
     # Plots one bounding box on image img
     tl = line_thickness or round(0.002 * (img.shape[0] + img.shape[1]) / 2) + 1  # line/font thickness
     color = color or [random.randint(0, 255) for _ in range(3)]
     c1, c2 = (int(x[0]), int(x[1])), (int(x[2]), int(x[3]))
-    cv2.rectangle(img, c1, c2, color, thickness=tl, lineType=cv2.LINE_AA)
+    # 25th Feb 2022
+
+      
+      #cv2.putText(img, str(angle), (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
+    #cv2.rectangle(img, c1, c2, color, thickness=tl, lineType=cv2.LINE_AA)
+    if type(whichclass) != int:
+      cv2.rectangle(img, c1, c2, color, thickness=tl, lineType=cv2.LINE_AA)
+      if angle: 
+       tf = max(tl - 1, 1)  # font thickness
+       t_size = cv2.getTextSize(label, 0, fontScale=tl / 9, thickness=tf)[0]  
+       color2 = (100, 8, 22)   
+       len = 70
+       centerx, centery =  center(c1, c2) #center x center y, length is needed to calcoords of the other point to draw a line
+       start_point = (round(centerx), round(centery))
+       linex, liney = calccoords(len, start_point[0], start_point[1], angle, pred)
+       end_point = (round(linex), round(liney))
+       cv2.line(img, start_point, end_point, color2, 3)
+      
+    if type(whichclass) == int:
+      if int(label[0]) == whichclass:
+        cv2.rectangle(img, c1, c2, color, thickness=tl, lineType=cv2.LINE_AA)
+        if angle: 
+         tf = max(tl - 1, 1)  # font thickness
+         t_size = cv2.getTextSize(label, 0, fontScale=tl / 9, thickness=tf)[0]  
+         color2 = (100, 8, 22)   
+         len = 70
+         centerx, centery =  center(c1, c2) #center x center y, length is needed to calcoords of the other point to draw a line
+         start_point = (round(centerx), round(centery))
+         linex, liney = calccoords(len, start_point[0], start_point[1], angle, pred)
+         end_point = (round(linex), round(liney))
+         cv2.line(img, start_point, end_point, color2, 3)
     if label:
         tf = max(tl - 1, 1)  # font thickness
         t_size = cv2.getTextSize(label, 0, fontScale=tl / 3, thickness=tf)[0]
         c2 = c1[0] + t_size[0], c1[1] - t_size[1] - 3
-        cv2.rectangle(img, c1, c2, color, -1, cv2.LINE_AA)  # filled
-        cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
+        if type(whichclass) != int:
 
+          cv2.rectangle(img, c1, c2, color, -1, cv2.LINE_AA)  # filled
+          cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
+        if type(whichclass) == int:
+          if int(label[0]) == whichclass:
+
+            cv2.rectangle(img, c1, c2, color, -1, cv2.LINE_AA)  # filled
+            cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
+            
+        
+        
 
 def plot_wh_methods():  # from utils.plots import *; plot_wh_methods()
     # Compares the two methods for width-height anchor multiplication
@@ -91,13 +149,194 @@ def plot_wh_methods():  # from utils.plots import *; plot_wh_methods()
 def output_to_target(output):
     # Convert model output to target format [batch_id, class_id, x, y, w, h, conf]
     targets = []
+
     for i, o in enumerate(output):
         for *box, conf, cls in o.cpu().numpy():
             targets.append([i, cls, *list(*xyxy2xywh(np.array(box)[None])), conf])
+
     return np.array(targets)
 
 
-def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max_size=640, max_subplots=16):
+def plot_images(images, targets, paths=None, fname='images.jpg', angle = [], names=None, pred = False, whichclass = False, max_size=640, max_subplots=16):
+    # Plot image grid with labels
+    #print("")
+    #print("AT PLOTS.PY")
+   # print(angle)
+#    print("targets:")
+#    print(targets)
+#    print("targets.shape")
+#    print(targets.shape)
+#    print("")
+
+#    print("")
+#    print("just making sure fname")
+#    print(fname)
+#    print("what's angle")
+#    print(angle)
+#    
+#    print("")
+#    print("what's names")
+#    print(names)
+#    print("")
+#    print("what's fname")
+#    print(fname)
+#    print("targets.shape")
+#    print(targets.shape)
+#    print("")
+    if bool(angle):      
+      angle_n = angle[0]
+
+    if isinstance(images, torch.Tensor):
+        images = images.cpu().float().numpy()
+    if isinstance(targets, torch.Tensor):
+        targets = targets.cpu().numpy()
+
+    # un-normalise
+    if np.max(images[0]) <= 1:
+        images *= 255
+
+    tl = 1  # line thickness
+    tf = max(tl - 1, 1)  # font thickness
+    bs, _, h, w = images.shape  # batch size, _, height, width
+    bs = min(bs, max_subplots)  # limit plot images
+    ns = np.ceil(bs ** 0.5)  # number of subplots (square)
+
+    # Check if we should resize
+    scale_factor = max_size / max(h, w)
+    if scale_factor < 1:
+        h = math.ceil(scale_factor * h)
+        w = math.ceil(scale_factor * w)
+
+    colors = color_list()  # list of colors
+    
+#    print("IMG SHAPE-----------------------------------------")
+#    print(images[0].shape)
+    channels = images[0].shape[0]
+#    print(channels)
+#    print("-----------------------------------------------")
+    
+    mosaic = np.full((int(ns * h), int(ns * w), 3), 255, dtype=np.uint8)  # init
+    for i, img in enumerate(images):
+        if channels == 6:
+          img = img[3:6]
+#          print("IMG_SHAPE 22222222222222222222222")
+#          print(img.shape)
+#          print("-----------------------ENDS SHAPE-------------------------------------")
+        if i == max_subplots:  # if last batch has fewer images than we expect
+            break
+
+        block_x = int(w * (i // ns))
+        block_y = int(h * (i % ns))
+
+        img = img.transpose(1, 2, 0)
+        if scale_factor < 1:
+            img = cv2.resize(img, (w, h))
+
+        mosaic[block_y:block_y + h, block_x:block_x + w, :] = img
+#        print("")
+#        print("how does targets differ in plots.py")
+#        print(targets.shape)
+#        print(targets)
+#        print("")
+        
+        if len(targets) > 0:
+            
+            image_targets = targets[targets[:, 0] == i]
+#            print("")
+#            print("angle_n")
+#            print(angle_n)
+#            print("angle_n[0][0]")
+#            print(angle_n[0][0])   
+#            print("")
+
+            if bool(angle):
+              image_angle = angle_n[targets[:,0] == i]
+              
+              
+
+            boxes = xywh2xyxy(image_targets[:, 2:6]).T
+            classes = image_targets[:, 1].astype('int')
+            
+#            print("")
+#            print("image_targets")
+#            print(image_targets)
+#            print("")
+            
+            labels = image_targets.shape[1] == 6  # labels if no conf column
+            conf = None if labels else image_targets[:, 6]  # check for confidence presence (label vs pred)
+
+            if boxes.shape[1]:
+                if boxes.max() <= 1.01:  # if normalized with tolerance 0.01
+                    boxes[[0, 2]] *= w  # scale to pixels
+                    boxes[[1, 3]] *= h
+                elif scale_factor < 1:  # absolute coords need scale if image scales
+                    boxes *= scale_factor
+            boxes[[0, 2]] += block_x
+            boxes[[1, 3]] += block_y
+#            print("")
+#            print(angle_n)
+#            print(boxes)
+#            print(image_angle.shape)
+#            print(boxes.shape)
+#            print("")
+            for j, box in enumerate(boxes.T):
+#                print("")
+#                print("j")
+#                print(j)
+#                print("angle_n[j]")
+#                print(angle_n[j])
+#                print("")
+                cls = int(classes[j])
+#                print("")
+#                print("j")
+#                print(j)
+#                print("classes")
+#                print(classes)
+#                print("")
+#                print("cls")
+#                print(cls)
+#                print("")
+                color = colors[cls % len(colors)]
+                
+                cls = names[cls] if names else cls
+                if labels or conf[j] > 0.001:  # 0.25 conf thresh
+                    label = '%s' % cls if labels else '%s %.1f' % (cls, conf[j])
+                    if bool(angle):
+                      plot_one_box(box, mosaic, label=label, color=color, line_thickness=tl, angle = image_angle[j], pred = pred, whichclass = whichclass) # plot box with angle
+                    if bool(angle) == False:
+                      plot_one_box(box, mosaic, label=label, color=color, line_thickness=tl, angle = [], pred = pred, whichclass = whichclass)
+                      
+
+        # Draw image filename labels
+        if paths:
+            label = Path(paths[i]).name[:40]  # trim to 40 char
+            t_size = cv2.getTextSize(label, 0, fontScale=tl / 3, thickness=tf)[0]
+            cv2.putText(mosaic, label, (block_x + 5, block_y + t_size[1] + 5), 0, tl / 3, [220, 220, 220], thickness=tf,
+                        lineType=cv2.LINE_AA)
+
+        # Image border
+        cv2.rectangle(mosaic, (block_x, block_y), (block_x + w, block_y + h), (255, 255, 255), thickness=3)
+
+    if fname:
+        r = min(1280. / max(h, w) / ns, 1.0)  # ratio to limit image size
+        mosaic = cv2.resize(mosaic, (int(ns * w * r), int(ns * h * r)), interpolation=cv2.INTER_AREA)
+        # cv2.imwrite(fname, cv2.cvtColor(mosaic, cv2.COLOR_BGR2RGB))  # cv2 save
+        #Image.fromarray(mosaic).save(fname)  # PIL save #original edited on 8th March 2022
+        #print("")
+        #print("fname")
+
+        #print(os.path.join(os.path.dirname(fname),label))
+        if os.path.basename(fname)[-8:] == "pred.jpg":
+          properlabel = os.path.join(os.path.dirname(fname),label)
+          Image.fromarray(mosaic).save(properlabel)
+          
+        else:
+          Image.fromarray(mosaic).save(fname)
+        
+    return mosaic
+    
+    
+def plot_images_vgt(images, targets,targets2, paths=None, fname='images.jpg', names=None, max_size=640, max_subplots=16):    #--------------------------Jedit from here (also added extra targets2
     # Plot image grid with labels
 
     if isinstance(images, torch.Tensor):
@@ -135,7 +374,7 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
             img = cv2.resize(img, (w, h))
 
         mosaic[block_y:block_y + h, block_x:block_x + w, :] = img
-        if len(targets) > 0:
+        if len(targets) > 0:                                                                      #-----------------------------Jedit copy from here
             image_targets = targets[targets[:, 0] == i]
             boxes = xywh2xyxy(image_targets[:, 2:6]).T
             classes = image_targets[:, 1].astype('int')
@@ -156,7 +395,36 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
                 cls = names[cls] if names else cls
                 if labels or conf[j] > 0.25:  # 0.25 conf thresh
                     label = '%s' % cls if labels else '%s %.1f' % (cls, conf[j])
-                    plot_one_box(box, mosaic, label=label, color=color, line_thickness=tl)
+                    plot_one_box(box, mosaic, label=label, color=color, line_thickness=tl)        #-----------------------------Jedit to here
+                    
+                    
+        if len(targets2) > 0:                                                                 #-----------------------------Jedit copied block from here
+            image_targets2 = targets2[targets2[:, 0] == i]
+            boxes2 = xywh2xyxy(image_targets2[:, 2:6]).T
+            classes2 = image_targets2[:, 1].astype('int')
+            labels2 = image_targets2.shape[1] == 6  # labels if no conf column
+            conf2 = None if labels2 else image_targets2[:, 6]  # check for confidence presence (label vs pred)
+ 
+            if boxes2.shape[1]:
+                if boxes2.max() <= 1.01:  # if normalized with tolerance 0.01
+                    boxes2[[0, 2]] *= w  # scale to pixels
+                    boxes2[[1, 3]] *= h
+                elif scale_factor < 1:  # absolute coords need scale if image scales
+                    boxes2 *= scale_factor
+            boxes2[[0, 2]] += block_x
+            boxes2[[1, 3]] += block_y
+            for j, box2 in enumerate(boxes2.T):
+                cls2 = int(classes2[j])
+                color2 = colors[cls2 % len(colors)+2]
+                cls2 = names[cls2] if names else cls2
+                if labels2 or conf2[j] > 0.25:  # 0.25 conf thresh
+                    label2 = '%s' % cls2 if labels2 else '%s %.1f' % (cls2, conf2[j])
+                    plot_one_box(box2, mosaic, label=label2, color=color2, line_thickness=tl)    #---------------------------Jedit copied block to here
+                    
+          
+                    
+                    
+                    
 
         # Draw image filename labels
         if paths:
@@ -173,7 +441,7 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
         mosaic = cv2.resize(mosaic, (int(ns * w * r), int(ns * h * r)), interpolation=cv2.INTER_AREA)
         # cv2.imwrite(fname, cv2.cvtColor(mosaic, cv2.COLOR_BGR2RGB))  # cv2 save
         Image.fromarray(mosaic).save(fname)  # PIL save
-    return mosaic
+    return mosaic                                                                                          #-----------------------------Jedit to here
 
 
 def plot_lr_scheduler(optimizer, scheduler, epochs=300, save_dir=''):
@@ -400,6 +668,42 @@ def plot_results(start=0, stop=0, bucket='', id=(), labels=(), save_dir=''):
             for i in range(10):
                 y = results[i, x]
                 if i in [0, 1, 2, 5, 6, 7]:
+                    y[y == 0] = np.nan  # don't show zero loss values
+                    # y /= y[0]  # normalize
+                label = labels[fi] if len(labels) else f.stem
+                ax[i].plot(x, y, marker='.', label=label, linewidth=2, markersize=8)
+                ax[i].set_title(s[i])
+                # if i in [5, 6, 7]:  # share train and val loss y axes
+                #     ax[i].get_shared_y_axes().join(ax[i], ax[i - 5])
+        except Exception as e:
+            print('Warning: Plotting error for %s; %s' % (f, e))
+
+    ax[1].legend()
+    fig.savefig(Path(save_dir) / 'results.png', dpi=200)
+    
+    
+def plot_results_angle(start=0, stop=0, bucket='', id=(), labels=(), save_dir=''):  # plotting for angle training 3rd March 2022
+    # Plot training 'results*.txt'. from utils.plots import *; plot_results(save_dir='runs/train/exp')
+    fig, ax = plt.subplots(2, 6, figsize=(12, 6), tight_layout=True) # change from 5 to 6 3rd March 2022
+    ax = ax.ravel()
+    s = ['Box', 'Objectness', 'Classification', 'Precision', 'Recall', 'Angle',
+         'val Box', 'val Objectness', 'val Classification', 'mAP@0.5', 'mAP@0.5:0.95', 'AngleDiff']
+    if bucket:
+        # files = ['https://storage.googleapis.com/%s/results%g.txt' % (bucket, x) for x in id]
+        files = ['results%g.txt' % x for x in id]
+        c = ('gsutil cp ' + '%s ' * len(files) + '.') % tuple('gs://%s/results%g.txt' % (bucket, x) for x in id)
+        os.system(c)
+    else:
+        files = list(Path(save_dir).glob('results*.txt'))
+    assert len(files), 'No results.txt files found in %s, nothing to plot.' % os.path.abspath(save_dir)
+    for fi, f in enumerate(files):
+        try:
+            results = np.loadtxt(f, usecols=[2, 3, 4, 9, 10, 6, 13, 14, 15, 11, 12, 16], ndmin=2).T
+            n = results.shape[1]  # number of rows
+            x = range(start, min(stop, n) if stop else n)
+            for i in range(12):
+                y = results[i, x]
+                if i in [0, 1, 2, 6, 7, 8]:
                     y[y == 0] = np.nan  # don't show zero loss values
                     # y /= y[0]  # normalize
                 label = labels[fi] if len(labels) else f.stem

@@ -1,4 +1,8 @@
 # Dataset utils and dataloaders
+# IMPORTANT note for if self.angle is activated, only fliplr has an effect on angle since default yolov5 augmentation 
+# doesn't use other perspective augmentation. (ps. translation doesn't affect angle whatsoever)
+# random perspective apparantly doesn't include fliplr or up down, therefore, angles are not affected
+
 
 import glob
 import logging
@@ -19,6 +23,7 @@ import torch.nn.functional as F
 from PIL import Image, ExifTags
 from torch.utils.data import Dataset
 from tqdm import tqdm
+import tifffile
 
 from utils.general import xyxy2xywh, xywh2xyxy, xywhn2xyxy, clean_str
 from utils.torch_utils import torch_distributed_zero_first
@@ -56,7 +61,7 @@ def exif_size(img):
 
 
 def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
-                      rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix=''):
+                      rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix='', schannel = False, angle = False, whichclass = False):
     # Make sure only the first process in DDP process the dataset first, and the following others can use the cache
     with torch_distributed_zero_first(rank):
         dataset = LoadImagesAndLabels(path, imgsz, batch_size,
@@ -65,22 +70,35 @@ def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=Fa
                                       rect=rect,  # rectangular training
                                       cache_images=cache,
                                       single_cls=opt.single_cls,
-                                      stride=int(stride),
-                                      pad=pad,
+                                      stride = int(stride),
+                                      pad = pad,
                                       image_weights=image_weights,
-                                      prefix=prefix)
+                                      prefix=prefix,
+                                      schannel = schannel,
+                                      angle = angle,
+                                      whichclass = whichclass)
+                                      
+#    print("INSIDE CREATE DATALOADER DATASET.SHAPES---------------------------------")
+#    print(dataset.shapes)
+#    print("-------------------------------------------------------------------------")
 
     batch_size = min(batch_size, len(dataset))
     nw = min([os.cpu_count() // world_size, batch_size if batch_size > 1 else 0, workers])  # number of workers
     sampler = torch.utils.data.distributed.DistributedSampler(dataset) if rank != -1 else None
-    loader = torch.utils.data.DataLoader if image_weights else InfiniteDataLoader
+    loader = torch.utils.data.DataLoader if image_weights or angle else InfiniteDataLoader
     # Use torch.utils.data.DataLoader() if dataset.properties will update during training else InfiniteDataLoader()
     dataloader = loader(dataset,
                         batch_size=batch_size,
                         num_workers=nw,
                         sampler=sampler,
                         pin_memory=True,
-                        collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn)
+                        collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn_a if angle else LoadImagesAndLabels.collate_fn)
+    
+#    print("IMGSZTEST--------------------IMFSZTEST-------------------------------------") #---------------------------------------JTROUBLESHOOT
+#    print(imgsz)
+#    print(stride)
+#    print("IMGSZENDS--------------------IMGSIZEENDS-----------------------------------")  #JTROUBLESHOOT ENDS----------------------------------
+
     return dataloader, dataset
 
 
@@ -119,7 +137,7 @@ class _RepeatSampler(object):
 
 
 class LoadImages:  # for inference
-    def __init__(self, path, img_size=640, stride=32):
+    def __init__(self, path, img_size=640, stride=32, schannel=False):
         p = str(Path(path))  # os-agnostic
         p = os.path.abspath(p)  # absolute path
         if '*' in p:
@@ -141,6 +159,7 @@ class LoadImages:  # for inference
         self.nf = ni + nv  # number of files
         self.video_flag = [False] * ni + [True] * nv
         self.mode = 'image'
+        self.schannel = schannel
         if any(videos):
             self.new_video(videos[0])  # new video
         else:
@@ -177,9 +196,15 @@ class LoadImages:  # for inference
         else:
             # Read image
             self.count += 1
-            img0 = cv2.imread(path)  # BGR
-            assert img0 is not None, 'Image Not Found ' + path
-            print(f'image {self.count}/{self.nf} {path}: ', end='')
+            if self.schannel == False:
+             img0 = cv2.imread(path)  # BGR
+             assert img0 is not None, 'Image Not Found ' + path
+             print(f'image {self.count}/{self.nf} {path}: ', end='')
+            if self.schannel == True:
+              img0 = tifffile.imread(path) # BGRBGR
+              assert img0 is not None, 'Image Not Found ' + path
+              print(f'image {self.count}/{self.nf} {path}: ', end='')
+              
 
         # Padded resize
         img = letterbox(img0, self.img_size, stride=self.stride)[0]
@@ -335,11 +360,13 @@ def img2label_paths(img_paths):
     # Define label paths as a function of image paths
     sa, sb = os.sep + 'images' + os.sep, os.sep + 'labels' + os.sep  # /images/, /labels/ substrings
     return [x.replace(sa, sb, 1).replace('.' + x.split('.')[-1], '.txt') for x in img_paths]
-
-
-class LoadImagesAndLabels(Dataset):  # for training/testing
+    
+def lbl2angle_paths(lbl_paths): # 17th February try to read from angle file # need to create anglelabels folder
+    return lbl_paths.replace("labels", "anglelabels")
+      
+class LoadImagesAndLabels(Dataset):  # for training/testing # bloopy2
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix=''):
+                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix='', schannel = False, angle = False, whichclass = False):
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -349,6 +376,9 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         self.mosaic_border = [-img_size // 2, -img_size // 2]
         self.stride = stride
         self.path = path
+        self.schannel = schannel
+        self.angle = angle
+        self.whichclass = whichclass
         
         try:
             f = []  # image files
@@ -363,13 +393,21 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                         f += [x.replace('./', parent) if x.startswith('./') else x for x in t]  # local to global path
                 else:
                     raise Exception(f'{prefix}{p} does not exist')
-            self.img_files = sorted([x.replace('/', os.sep) for x in f if x.split('.')[-1].lower() in img_formats])
+            self.img_files = sorted([x.replace('/', os.sep) for x in f if x.split('.')[-1].lower() in img_formats]) 
             assert self.img_files, f'{prefix}No images found'
         except Exception as e:
             raise Exception(f'{prefix}Error loading data from {path}: {e}\nSee {help_url}')
 
-        # Check cache
+        # Check cache # bloopy3
         self.label_files = img2label_paths(self.img_files)  # labels
+        
+#        if self.angle:
+#          self.anglelabel_files = img2angle_paths(self.img_files)
+          
+#        print("")
+#        print("ln394 label_files---------------- (15th amnesia)")
+#        print(self.label_files)
+#        print("")
         cache_path = Path(self.label_files[0]).parent.with_suffix('.cache')  # cached labels
         if cache_path.is_file():
             cache = torch.load(cache_path)  # load
@@ -378,6 +416,11 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         else:
             cache = self.cache_labels(cache_path, prefix)  # cache
 
+#        print("")
+#        print("cache before any popping")
+#        print(cache)
+#        print("")
+        
         # Display cache
         [nf, nm, ne, nc, n] = cache.pop('results')  # found, missing, empty, corrupted, total
         desc = f"Scanning '{cache_path}' for images and labels... {nf} found, {nm} missing, {ne} empty, {nc} corrupted"
@@ -386,34 +429,97 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         # Read cache
         cache.pop('hash')  # remove hash
-        labels, shapes = zip(*cache.values())
-        self.labels = list(labels)
+#        print("BEFORE ARRVIING")
+#        print(self.angle)
+        if self.angle == False:
+#          print("")
+#          print("YOU HAVE ARRIVED AT ANGLE FALSE")
+#          print("")
+          labels, shapes = zip(*cache.values())
+          
+        if self.angle:
+#          print("")
+#          print("YOU HAVE ARRIVED AT ANGLE TRUE")
+#          print("")
+          labels, shapes, anglelist = zip(*cache.values())
+          self.anglelist = list(anglelist)
+#          print("")
+#          print("datasets.py cache")
+#          print(cache)
+#          print("")
+#        print("")
+#        print("datasets.py ln413 labels, shapes from zip(*cache.values())-------------------HALOOOOOOO") # 14th February
+#        print("labels")
+#        print(labels)
+#        print("shapes")
+#        print(shapes)
+#        print("")
+        self.labels = list(labels) 
+          
+#        print("")
+#        print("list(labels-------)")
+#        print(list(labels))
+#        print("")
+        
         self.shapes = np.array(shapes, dtype=np.float64)
+#        print("please pay attention here--------------------------------------------")
+#        print(self.shapes)
+        # schannel = 320, 240
+        # no schannel 320, 240
         self.img_files = list(cache.keys())  # update
-        self.label_files = img2label_paths(cache.keys())  # update
+#        print("img_files-------------------- (15th amnesia)")
+#        print(self.img_files)
+#        print("")
+#        print("")
+#        print("cache.keys()-------------------")
+#        print(cache.keys())
+#        print("")
+#        print("list(cache.keys())---------------------")
+#        print(list(cache.keys()))
+#        print("")
+        
+        self.label_files = img2label_paths(cache.keys())  # update the order of image if im not mistaken
+#        print("ln451 label_files no.2 ----------------- (15th amnesia)")  # my point is to check how they make sure the list is the same
+#        print(self.label_files)
+#        print("")
+        if angle:    # 14th February # 17th February
+          print("ANGLE ACTIVATED!!-----------")
+          #self.anglelabel_files = img2angle_paths(cache.keys())   # just following the update
+          
+
+        
         if single_cls:
             for x in self.labels:
                 x[:, 0] = 0
+        
 
         n = len(shapes)  # number of images
         bi = np.floor(np.arange(n) / batch_size).astype(np.int)  # batch index
         nb = bi[-1] + 1  # number of batches
         self.batch = bi  # batch index of image
         self.n = n
-        self.indices = range(n)
+        self.indices = range(n) 
 
         # Rectangular Training
         if self.rect:
             # Sort by aspect ratio
             s = self.shapes  # wh
+#            print("TIME FOR S")    # 8TH January*************
+#            print(s)
             ar = s[:, 1] / s[:, 0]  # aspect ratio
             irect = ar.argsort()
             self.img_files = [self.img_files[i] for i in irect]
             self.label_files = [self.label_files[i] for i in irect]
             self.labels = [self.labels[i] for i in irect]
+            
+            if self.angle:  
+              self.anglelist = [self.anglelist[i] for i in irect]
             self.shapes = s[irect]  # wh
+#            print("SHEPS------------SHEPS--------------SHEPS-----------")        #----------------------------------JTROUBLESHOOT(concat mismatch)
+#            print(self.shapes[0])  #<-----------------1920 1088----------------
+#            print("------------------SHEPS ENDS------------------------")        #----------------------------------JTROUBLESHOOT_ENDS-----------
             ar = ar[irect]
-
+ 
             # Set training image shapes
             shapes = [[1, 1]] * nb
             for i in range(nb):
@@ -424,14 +530,24 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 elif mini > 1:
                     shapes[i] = [1, 1 / mini]
 
+#--------------------------------------------------------------------------------------------JEDIT change stride to solve concat mismatch problem
+#            print("RECT PROGRESS SO FAR-------------------------------------------------")
+            stride =32
+#            print(stride)
+#            
+#            #print(self.batch_shapes)
+#            print("RECT PROGRESS SO FAR-------------------------------------------------")
+#---------------------------------------------------------------------------------------------JEDIT ends---------------------------------------
+            
             self.batch_shapes = np.ceil(np.array(shapes) * img_size / stride + pad).astype(np.int) * stride
+
 
         # Cache images into memory for faster training (WARNING: large datasets may exceed system RAM)
         self.imgs = [None] * n
         if cache_images:
             gb = 0  # Gigabytes of cached images
             self.img_hw0, self.img_hw = [None] * n, [None] * n
-            results = ThreadPool(8).imap(lambda x: load_image(*x), zip(repeat(self), range(n)))  # 8 threads
+            results = ThreadPool(8).imap(lambda x: load_image(*x, schannel), zip(repeat(self), range(n)))  # 8 threads
             pbar = tqdm(enumerate(results), total=n)
             for i, x in pbar:
                 self.imgs[i], self.img_hw0[i], self.img_hw[i] = x  # img, hw_original, hw_resized = load_image(self, i)
@@ -443,20 +559,62 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         x = {}  # dict
         nm, nf, ne, nc = 0, 0, 0, 0  # number missing, found, empty, duplicate
         pbar = tqdm(zip(self.img_files, self.label_files), desc='Scanning images', total=len(self.img_files))
+          
+        
         for i, (im_file, lb_file) in enumerate(pbar):
             try:
                 # verify images
                 im = Image.open(im_file)
-                im.verify()  # PIL verify
-                shape = exif_size(im)  # image size
+                if im_file.endswith(".tiff"):
+                  im = tifffile.imread(im_file)                                  
+                  im = im.swapaxes(0,1)
+                  preshape = im.shape[0:2]
+                  shape = preshape
+                  #shape = [preshape[1],preshape[0]]
+                  #shape = [120, 320]
+                                                    
+                if im_file.endswith(".tiff") == False:
+                  im.verify()  # PIL verify
+                  shape = exif_size(im)  # image size
+#                print("CACHE LABELS SHAPE----------------")
+                #print(shape)
                 assert (shape[0] > 9) & (shape[1] > 9), f'image size {shape} <10 pixels'
-                assert im.format.lower() in img_formats, f'invalid image format {im.format}'
+                
+                if im_file.endswith(".tiff") == False:
+                  assert im.format.lower() in img_formats, f'invalid image format {im.format}'
+                  
+                #../VOC3/labels/testangle_106/gt_106_frame(1008).txt
+                
 
                 # verify labels
                 if os.path.isfile(lb_file):
                     nf += 1  # label found
                     with open(lb_file, 'r') as f:
                         l = np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)  # labels
+#                        print("")
+#                        print("WHAT DOES L LOOK LIKE AGAIN?--------")
+#                        print(l)
+#                        print("")
+#                        
+                    # angle labels
+                    if self.angle: # 18th February 2022
+                      #print("YEP IT DEFINITELY WENT HERE")
+                      ag_file = lbl2angle_paths(lb_file)
+#                      print(ag_file)
+#                      print(os.path.isfile(ag_file))
+#                      print("")
+                      with open(ag_file, 'r') as k:
+                        #print("YEP IT DEFINITELY WENT HERE#2")
+                        a = np.array(k.read().strip().splitlines(), dtype=np.float32)
+#                        print("")
+#                        print("WHAT DOES A LOOK LIKE THEN?---------")
+#                        print(a)
+#                        print("")
+#                        print("HOW DOES IT EVEN AFFECT L?")
+#                        print(l)
+#                        print("")
+#                      
+                    
                     if len(l):
                         assert l.shape[1] == 5, 'labels require 5 columns each'
                         assert (l >= 0).all(), 'negative labels'
@@ -465,13 +623,53 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                     else:
                         ne += 1  # label empty
                         l = np.zeros((0, 5), dtype=np.float32)
+                        if angle:
+                          a = np.array([99])
                 else:
                     nm += 1  # label missing
                     l = np.zeros((0, 5), dtype=np.float32)
-                x[im_file] = [l, shape]
+                    if angle:
+                          a = np.array([99])
+                
+                
+#                print("")
+#                print("WHAT ABOUT HERE?")
+#                print(self.angle)
+#                print("")
+                if self.angle == False:
+#                  print("")
+#                  print("ANGLE IS FALSE IN THIS ONE")
+#                  print("")
+                  x[im_file] = [l, shape]
+                
+                if self.angle:
+#                  print("")
+#                  print("ANGLE IS TRUE IN THIS ONE")
+#                  print("")
+                  
+                  x[im_file] = [l,shape,a]
+#                  print("")
+#                  print("SAMPLE X[IM_FILE]")
+#                  print(x[im_file])
+#                  print("")
+                            
+                
+#                print("DOES IT INCLUDE FOLDER NAME?") # 17th  Feb 2022
+#                print(lb_file)
+#                print("")
+#                print("what happens if I do this----------------------")
+#                ag_file = lbl2angle_paths(lb_file)
+#                print(ag_file)
+#                print("")
+                
             except Exception as e:
                 nc += 1
                 print(f'{prefix}WARNING: Ignoring corrupted image and/or label {im_file}: {e}')
+                
+                
+#                if self.angle == True: # 17th February bloopy4
+#                  if os.path
+                
 
             pbar.desc = f"{prefix}Scanning '{path.parent / path.stem}' for images and labels... " \
                         f"{nf} found, {nm} missing, {ne} empty, {nc} corrupted"
@@ -481,9 +679,27 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         x['hash'] = get_hash(self.label_files + self.img_files)
         x['results'] = [nf, nm, ne, nc, i + 1]
+#        print("")
+#        print("datasets.py ln543 def cache_labels")
+#        print("x[hash]")      # 20th Febr 2022
+#        print(x['hash'])
+#        print("x['results']")
+#        print(x['results'])
+#        print("")
+#        print("X[IM_FILE]")
+#        print(len(x[im_file]))
+#        print(x[im_file][0])
+#        print(x[im_file][0].shape)
+#        print(x[im_file][1])
+#        print(x[im_file][2])
+#        print(angle)
+#        print("")
+        
         torch.save(x, path)  # save for next time
         logging.info(f'{prefix}New cache created: {path}')
         return x
+        
+        
 
     def __len__(self):
         return len(self.img_files)
@@ -493,16 +709,51 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
     #     print('ran dataset iter')
     #     #self.shuffled_vector = np.random.permutation(self.nF) if self.augment else np.arange(self.nF)
     #     return self
-
+        
     def __getitem__(self, index):
+    
+#        print("") # 18th Feb 2022
+#        print("INDEX in _GETITEM_BEFORE")
+#        print(index)
+#        
         index = self.indices[index]  # linear, shuffled, or image_weights
-
+        
+#        print("") # 18th Feb 2022
+#        print("INDEX in _GETITEM_AFTER")
+#        print(index)
+#        print("SELF . RECT")
+#        print(self.rect)
+#        print("")
+          
+          
+          
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp['mosaic']
+        schannel = self.schannel
         if mosaic:
-            # Load mosaic
-            img, labels = load_mosaic(self, index)
-            shapes = None
+            # Load mosaic bloopy44
+            if self.angle == False:
+              # print("IT SEEMS LIKE IT CAME HERE INSTEEEEEEEAD 22ND FEB")
+              
+              img, labels = load_mosaic(self, index, schannel, angle = self.angle)
+            
+            
+            if self.angle:
+#              print("")
+#             print("AYYYYY IT CAME HEEEEEEERE 22ND FEB")
+#              print(index)
+#              print(schannel)
+#              print(self.angle)
+#              print("")
+#              print("datasets.py angle + schannel troubleshoot 13th March 2022")
+#              print("labels.shape")
+#              print(labels.shape)
+#              print("angle_s.shape")
+#              print(angle_s.shape)
+#              print("")
+              img, labels, angle_s = load_mosaic(self, index, schannel, angle = self.angle) # self includes self.anglelist where angle array is
+
+            shapes = None         
 
             # MixUp https://arxiv.org/pdf/1710.09412.pdf
             if random.random() < hyp['mixup']:
@@ -511,71 +762,249 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 img = (img * r + img2 * (1 - r)).astype(np.uint8)
                 labels = np.concatenate((labels, labels2), 0)
 
-        else:
+        else: # 23rd Feb 2022 bloopy222
             # Load image
-            img, (h0, w0), (h, w) = load_image(self, index)
+        
+            img, (h0, w0), (h, w) = load_image(self, index, schannel)
 
             # Letterbox
             shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
-            img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
+            img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment) #bloopy3
             shapes = (h0, w0), ((h / h0, w / w0), pad)  # for COCO mAP rescaling
 
             labels = self.labels[index].copy()
+            
+            if self.angle:
+              angle_s = self.anglelist[index].copy()
+              
+#              print("")
+#              print("self.img files")     # 27th Feb 2022 confirm ok
+#              print(self.img_files[index])
+#              print("self.label files")
+#              print(self.label_files[index])
+#              print("angle_s")
+#              print(angle_s)
+#              print("")
+              
             if labels.size:  # normalized xywh to pixel xyxy format
                 labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
+                
+            
 
         if self.augment:
             # Augment imagespace
             if not mosaic:
-                img, labels = random_perspective(img, labels,
-                                                 degrees=hyp['degrees'],
-                                                 translate=hyp['translate'],
-                                                 scale=hyp['scale'],
-                                                 shear=hyp['shear'],
-                                                 perspective=hyp['perspective'])
+                if self.angle == False:
+                 img, labels = random_perspective(img, labels,
+                                                  degrees=hyp['degrees'],
+                                                  translate=hyp['translate'],
+                                                  scale=hyp['scale'],
+                                                  shear=hyp['shear'],
+                                                  perspective=hyp['perspective'])
+                 if self.angle:
+                  img, labels, angle_s = random_perspective(img, labels,  
+                                      degrees=self.hyp['degrees'],        # some labels (because of scale)
+                                      translate=self.hyp['translate'],
+                                      scale=self.hyp['scale'],
+                                      shear=self.hyp['shear'],
+                                      perspective=self.hyp['perspective'],
+                                      border=self.mosaic_border,
+                                      angle = angle,
+                                      anglelist = angle_s)  # border to remove
 
             # Augment colorspace
-            augment_hsv(img, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
+            if not schannel:
+              augment_hsv(img, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
 
             # Apply cutouts
             # if random.random() < 0.9:
             #     labels = cutout(img, labels)
 
         nL = len(labels)  # number of labels
+#        print("")
+#        print("is everything alright?")
+#        print("angle length")
+#        print(angle_s.shape)
+#        print("label shape")
+#        print(labels.shape)
+#        print("")
+        
         if nL:
             labels[:, 1:5] = xyxy2xywh(labels[:, 1:5])  # convert xyxy to xywh
             labels[:, [2, 4]] /= img.shape[0]  # normalized height 0-1
             labels[:, [1, 3]] /= img.shape[1]  # normalized width 0-1
-
+            if self.angle:
+              # return a list of True or False representing is it positive or negative angle
+              angleboolt = []
+              # angleboolf = []
+              
+              for a in range(nL):
+                if angle_s[a] >= 0:
+                  angleboolt.append(True)    # ~ln785
+                  #angleboolf.append(False)
+                else:
+                  angleboolt.append(False)
+                  #angleboolf.append(True)
+        
+#        print("")
+#        print("ANGLE_S BEFORE ANY PROCESSING")
+#        print(angle_s)
+#        print("")
+        
         if self.augment:
             # flip up-down
             if random.random() < hyp['flipud']:
                 img = np.flipud(img)
                 if nL:
-                    labels[:, 2] = 1 - labels[:, 2]
+                    labels[:, 2] = 1 - labels[:, 2]                   
+                    if self.angle:
+                      angle_s = angle_s * (-1)
+                      angleboolt = [not elem for elem in angleboolt]
+                      
+#                      for a in range(nL): # different type of processing for positive and negative radius 20th Feb 2022
+#                        angle_s[a] = (angle_s[a]) * (-1)                 
+
+#            print("")
+#            print("ANGLE_S AFTER FLIPUD")
+#            print(angle_s)
+#            print("")
+            
 
             # flip left-right
             if random.random() < hyp['fliplr']:
                 img = np.fliplr(img)
                 if nL:
                     labels[:, 1] = 1 - labels[:, 1]
+                    if self.angle:
+                      for a in range(nL):
+#                        print("")
+#                        print("is this where it gets messed up? datasets.py ")
+#                        print("before")
+#                        print(angle_s[a])
+#                        print("after")
+                        angle_s[a] = math.pi - (angle_s[a])
+                        if angle_s[a] > math.pi:
+                          angle_s[a] = angle_s[a] - (math.pi*2)
+#                        print("when flipping is involved")
+#                        print(angle_s[a])
+#                        print("")
+#                        if angleboolt[a] == True: # means it's in positive radian 20th Feb 2022  # ln 855 -> ln 859 (bogus formula)
+#                          angle_s[a] = math.pi - angle_s[a]
+#                          
+#                        else:    # means negative radian
+#                          angle_s[a] = (math.pi*(-1)) - angle_s[a]
+
+      
+                            
+#            print("")
+#            print("ANGLE_S AFTER FLIPLR")
+#            print(angle_s)
+#            print("")
 
         labels_out = torch.zeros((nL, 6))
-        if nL:
+        if self.angle:
+          angle_out = torch.tensor([])
+#        print("")
+#        print("nL")
+#        print(labels_out)
+#        print(nL)
+#        print(self.angle)
+#        print("")
+#        if nL == 0:
+#          print("")
+#          print("nL")
+#          print(nL)
+#          print("")
+        if nL:       
             labels_out[:, 1:] = torch.from_numpy(labels)
+            if self.angle: 
+              #print("CAME HERE")
+              angle_out = torch.from_numpy(angle_s)
+              #print(angle_out)
 
         # Convert
+        #print("---------------------CONVERT-------------------------")
+        #print(img.shape)
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
+        #print(img.shape)
         img = np.ascontiguousarray(img)
+        #print(img.shape)
+        #print("BLIOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOP")
+        
+        # load images and labels returned here 
+        
+        if self.angle == False:
+          if self.whichclass != False:
+            labels_out = labels_out[labels_out[:,1] == int(whichclass)]
+          return torch.from_numpy(img), labels_out, self.img_files[index], shapes
 
-        return torch.from_numpy(img), labels_out, self.img_files[index], shapes
+        if self.angle:
+#          print("")
+#          print("dataset.py")
+#          print("angle shape")
+#          print(angle_out.shape)
+#          print("labels_out shape")
+#          print(labels_out.shape)
+#          print("")
+
+#          print("")
+#          print("MOSAIC")
+#          print(mosaic)
+#          print("self.img_files")
+#          print(self.img_files[index])
+#          print("angle_out")
+#          print(angle_out.shape)  # 27th Feb 2022 everything seems to be accurate here too
+#          print("")
+
+          if type(self.whichclass) == int:  # if specific class only is specified
+            angle_out = angle_out[labels_out[:,1]== int(self.whichclass)]
+            labels_out = labels_out[labels_out[:,1] == int(self.whichclass)]
+            
+
+          return torch.from_numpy(img), labels_out, self.img_files[index], shapes, angle_out
 
     @staticmethod
     def collate_fn(batch):
+        #print("AYY IT MANAGE TO COM HERE")
         img, label, path, shapes = zip(*batch)  # transposed
+
         for i, l in enumerate(label):
             l[:, 0] = i  # add target image index for build_targets()
+        
         return torch.stack(img, 0), torch.cat(label, 0), path, shapes
+        
+        
+    @staticmethod
+    def collate_fn_a(batch):
+#       print("AYY IT MANAGE TO COME HERE")    
+       img, label, path, shapes, angle_z = zip(*batch)  # transposed
+       
+#       print("what's batch?")
+#       print(batch)
+#       
+#       print("")
+#       print("fresh from batch")
+#       print(angle_z)
+#       print("")
+       
+       for i, l in enumerate(label):
+           l[:, 0] = i  # add target image index for build_targets()
+           
+#       print("")
+#       print("dataset.py solve selfcollate issue")
+#       print("angle_z")
+#       print(angle_z)
+#       print("torch.cat(angle_z,0))")
+#       print(torch.cat(angle_z,0))      
+#       print("what about labels?")
+#       print(label) 
+#       print(torch.cat(label, 0))
+#       print("torch.cat angle_z")
+#       print(torch.cat(angle_z,0).shape)
+#       print("")       
+       
+       return torch.stack(img, 0), torch.cat(label, 0), path, shapes, torch.cat(angle_z,0)
+        
 
     @staticmethod
     def collate_fn4(batch):
@@ -600,26 +1029,62 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         for i, l in enumerate(label4):
             l[:, 0] = i  # add target image index for build_targets()
+            
+        
 
         return torch.stack(img4, 0), torch.cat(label4, 0), path4, shapes4
 
 
 # Ancillary functions --------------------------------------------------------------------------------------------------
-def load_image(self, index):
+def load_image(self, index, schannel = False):
     # loads 1 image from dataset, returns img, original hw, resized hw
     img = self.imgs[index]
-    if img is None:  # not cached
-        path = self.img_files[index]
-        img = cv2.imread(path)  # BGR
-        assert img is not None, 'Image Not Found ' + path
-        h0, w0 = img.shape[:2]  # orig hw
-        r = self.img_size / max(h0, w0)  # resize image to img_size
-        if r != 1:  # always resize down, only resize up if training with augmentation
-            interp = cv2.INTER_AREA if r < 1 and not self.augment else cv2.INTER_LINEAR
-            img = cv2.resize(img, (int(w0 * r), int(h0 * r)), interpolation=interp)
-        return img, (h0, w0), img.shape[:2]  # img, hw_original, hw_resized
-    else:
-        return self.imgs[index], self.img_hw0[index], self.img_hw[index]  # img, hw_original, hw_resized
+    #print("at least I reached here")
+#    print(self.img_files[index])
+#    print(cv2.imread(self.img_files[index]) )
+    if not schannel:
+     if img is None:  # not cached
+
+         path = self.img_files[index]    
+         img = cv2.imread(path)  # BGR
+         assert img is not None, 'Image Not Found ' + path
+         h0, w0 = img.shape[:2]  # orig hw
+         r = self.img_size / max(h0, w0)  # resize image to img_size
+         if r != 1:  # always resize down, only resize up if training with augmentation
+             interp = cv2.INTER_AREA if r < 1 and not self.augment else cv2.INTER_LINEAR
+             img = cv2.resize(img, (int(w0 * r), int(h0 * r)), interpolation=interp)            
+             
+#             if img is not None:
+#               print("THERE'S  HERE!---------------------------------")
+#               print(h0)
+#               print(w0)
+#               print(img.shape[:2])
+
+         return img, (h0, w0), img.shape[:2]  # img, hw_original, hw_resized
+     else:
+     
+         return self.imgs[index], self.img_hw0[index], self.img_hw[index]  # img, hw_original, hw_resized
+         
+    if schannel == True: # bloopy1 31st December 2021
+      #if img is None:  # not cached
+    
+      path = self.img_files[index]
+      img = tifffile.imread(path)  # BGR
+      assert img is not None, 'Image Not Found ' + path
+      h0, w0 = img.shape[:2]  # orig hw
+      r = self.img_size / max(h0, w0)  # resize image to img_size
+      if r != 1:  # always resize down, only resize up if training with augmentation
+          interp = cv2.INTER_AREA if r < 1 and not self.augment else cv2.INTER_LINEAR
+          img = cv2.resize(img, (int(w0 * r), int(h0 * r)), interpolation=interp)
+          #if img is not None:
+#            print("THERE'S  HERE!---------------------------------")
+#            print(h0)
+#            print(w0)
+#            print(img.shape[:2])
+          
+      return img, (h0, w0), img.shape[:2]  # img, hw_original, hw_resized
+#      else:
+#          return self.imgs[index], self.img_hw0[index], self.img_hw[index]  # img, hw_original, hw_resized
 
 
 def augment_hsv(img, hgain=0.5, sgain=0.5, vgain=0.5):
@@ -646,17 +1111,21 @@ def hist_equalize(img, clahe=True, bgr=False):
         yuv[:, :, 0] = cv2.equalizeHist(yuv[:, :, 0])  # equalize Y channel histogram
     return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR if bgr else cv2.COLOR_YUV2RGB)  # convert YUV image to RGB
 
-
-def load_mosaic(self, index):
+# bloopy24 18th February 2022 
+def load_mosaic(self, index, schannel = False, angle = False):
     # loads images in a 4-mosaic
-
+    
     labels4 = []
+    anglelist4 = []
     s = self.img_size
     yc, xc = [int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border]  # mosaic center x, y
-    indices = [index] + [self.indices[random.randint(0, self.n - 1)] for _ in range(3)]  # 3 additional image indices
+    indices = [index] + [self.indices[random.randint(0, self.n - 1)] for _ in range(3)]  # 3 additional image indices #mosaic element 20th Feb 2022
+
     for i, index in enumerate(indices):
         # Load image
-        img, _, (h, w) = load_image(self, index)
+ 
+
+        img, _, (h, w) = load_image(self, index, schannel)
 
         # place img in img4
         if i == 0:  # top left
@@ -673,32 +1142,109 @@ def load_mosaic(self, index):
             x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
             x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
 
+        
         img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
         padw = x1a - x1b
         padh = y1a - y1b
 
-        # Labels
+        # Labels        
+#        print("OK WE AT DEF LOAD MOSAIC NOW")
+#        print("s")
+#        print(s)       
+#       
+#        print("")
+#        print("INDEX NOW")
+#        print(index)
         labels = self.labels[index].copy()
+#        print("")
+#        print("troubleshoot #2")
+#        print("labels.shape")
+#        print(labels.shape)
+#        if i == 3:
+#          print("datasets.py ln 1162")
+#          print(self.labels[index].shape)
+#          print(self.anglelist[index].shape)
+#          print(self.img_files[index])
+
+        if self.angle:
+#          print("")
+#          print("anglelist at index({}): ".format(index))          
+          anglelist = self.anglelist[index].copy()
+#          print("len(anglelist)")
+#          print(len(anglelist))
+#          print("")
+          anglelist4.append(anglelist)
+          
         if labels.size:
             labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
-        labels4.append(labels)
 
+        labels4.append(labels)
+        
+        
+        
+#        print("")
+#        print("LABELS4 BEFORE CLIPPING")
+#        print(labels4)
+#        print("")
+    
+    
     # Concat/clip labels
+#    print("dataset.py ln1196")
+#    print(labels4[0].shape)
+#    print(anglelist4[0].shape)
+#    print(labels4[1].shape)
+#    print(anglelist4[1].shape)
+#    print(labels4[2].shape)
+#    print(anglelist4[2].shape)
+#    print(labels4[3].shape)
+#    print(anglelist4[3].shape)
     if len(labels4):
         labels4 = np.concatenate(labels4, 0)
         np.clip(labels4[:, 1:], 0, 2 * s, out=labels4[:, 1:])  # use with random_perspective
+        
+        if self.angle:
+          anglelist4 = np.concatenate(anglelist4, 0)
+        if self.angle == False:
+          anglelist4 = []
         # img4, labels4 = replicate(img4, labels4)  # replicate
-
+#    print("")
+#    print("LABELS4 and anglist4.SHAPE BEFORE PERESPECTIVE")
+#    print(labels4.shape)
+#    print(anglelist4)
+#    print("")
     # Augment
-    img4, labels4 = random_perspective(img4, labels4,
-                                       degrees=self.hyp['degrees'],
+    if self.angle == False:
+          img4, labels4 = random_perspective(img4, labels4,
+                                             degrees=self.hyp['degrees'],
+                                             translate=self.hyp['translate'],
+                                             scale=self.hyp['scale'],
+                                             shear=self.hyp['shear'],
+                                             perspective=self.hyp['perspective'],
+                                             border=self.mosaic_border,
+                                             angle = angle,
+                                             anglelist = anglelist4)  # border to remove
+    
+    if self.angle:
+          
+          img4, labels4, anglelist4 = random_perspective(img4, labels4,    # we need anglelist here because for some reason random_perspective removes
+                                       degrees=self.hyp['degrees'],        # some labels (because of scale)
                                        translate=self.hyp['translate'],
                                        scale=self.hyp['scale'],
                                        shear=self.hyp['shear'],
                                        perspective=self.hyp['perspective'],
-                                       border=self.mosaic_border)  # border to remove
+                                       border=self.mosaic_border,
+                                       angle = angle,
+                                       anglelist = anglelist4)  # border to remove
 
-    return img4, labels4
+    if angle == False:
+      return img4, labels4
+      
+    if angle:
+#      print("")
+#      print("SOMETHING SHOULD BE HERE ANGLELIST4")
+#      print(anglelist4)
+#      print("")
+      return img4, labels4, anglelist4
 
 
 def load_mosaic9(self, index):
@@ -817,11 +1363,20 @@ def letterbox(img, new_shape=(640, 640), color=(114, 114, 114), auto=True, scale
         img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
     top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
-    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
+    
+#    print("LETTERBOX TROUBLESHOOT=========================")
+#    print(img.shape)
+    if img.shape[2]!=6:
+      img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
+    if img.shape[2] == 6:
+      img1 = cv2.copyMakeBorder(img[:,:,:3], top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
+      img2 = cv2.copyMakeBorder(img[:,:,3:6], top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
+      img = np.dstack((img1, img2))
+    #print("its ok-------------------!!!!!!!!!!")
     return img, ratio, (dw, dh)
 
 
-def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shear=10, perspective=0.0, border=(0, 0)):
+def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shear=10, perspective=0.0, border=(0, 0), angle = False, anglelist = []):
     # torchvision.transforms.RandomAffine(degrees=(-10, 10), translate=(.1, .1), scale=(.9, 1.1), shear=(-10, 10))
     # targets = [cls, xyxy]
 
@@ -902,10 +1457,37 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
 
         # filter candidates
         i = box_candidates(box1=targets[:, 1:5].T * s, box2=xy.T)
+#        print("")
+#        print("AT RANDOM PERSPECTIVE NOW")
+#        print(i.shape)
+#        print(anglelist.shape)
+#        print(targets.shape)
+#        print("")
+#        print("")
+#        print("targets before i's interference")
+#        print(targets.shape)
         targets = targets[i]
+        if angle: # 20th Feb 2022 omit the same index of angle the same with labels
+#          # 13th March 2022 troublshoot error when schannel and angle is together
+#          print("")
+#          print("datasets.py")
+#          print(i)
+#          print(i.shape)
+#          print(targets.shape)
+#          print(anglelist.shape)
+#          print("")
+          anglelist = anglelist[i]
+          
+          
+          
+          
         targets[:, 1:5] = xy[i]
 
-    return img, targets
+    
+    if angle == False:
+      return img, targets
+    if angle:
+      return img, targets, anglelist
 
 
 def box_candidates(box1, box2, wh_thr=2, ar_thr=20, area_thr=0.1, eps=1e-16):  # box1(4,n), box2(4,n)

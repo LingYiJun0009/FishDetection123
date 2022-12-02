@@ -11,7 +11,12 @@ from PIL import Image, ImageDraw
 from utils.datasets import letterbox
 from utils.general import non_max_suppression, make_divisible, scale_coords, xyxy2xywh
 from utils.plots import color_list
+from matplotlib import pyplot as plt
 
+def bloop4(array,layername,evalstats): # 1st Dec just tryna troubleshoot eval()
+
+  array = array.detach().cpu().numpy()  
+  np.save('{layername}{evalstats}evalvalues.npy'.format(layername = layername, evalstats = evalstats ),array)
 
 def autopad(k, p=None):  # kernel, padding
     # Pad to 'same'
@@ -24,8 +29,41 @@ def DWConv(c1, c2, k=1, s=1, act=True):
     # Depthwise convolution
     return Conv(c1, c2, k, s, g=math.gcd(c1, c2), act=act)
 
+#class Conv(nn.Module):      # Conv edit to use current batch statistics to solve eval() problem 5th Dec JEdit for UperNET
+#    # Standard convolution 
+#    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
+#        super(Conv, self).__init__()
+#        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
+#        self.bn = nn.BatchNorm2d(c2)
+#        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+#        self.flatten = nn.Flatten(start_dim=2)
+#
+#    def forward(self, x):
+#        
+#        issitfocus = x.shape[1]
+#        x = self.conv(x)
+#        
+#        if self.training == False:
+#          state_dict_0 = self.bn.state_dict()
+##          print(state_dict_0['running_mean'][0])
+##          print(state_dict_0['running_var'][0])
+#          flatten = self.flatten(x)
+#          mean_init = torch.mean(flatten, dim = 2)[0]
+#          var_init = torch.var(flatten, dim = 2)[0]
+#          #print("thisvariance?[0]: " + str(np.var(x[0][0].detach().cpu().numpy())))
+#          #print("thismean?[0]: " + str(np.mean(x[0][0].detach().cpu().numpy())))
+# 
+#          state_dict_0['running_mean'].copy_(mean_init)
+#          state_dict_0['running_var'].copy_(var_init)
+#        
+#        x = self.bn(x)
+#        x = self.act(x)
+#        return x       
+#
+#    def fuseforward(self, x):
+#        return self.act(self.conv(x))
 
-class Conv(nn.Module):
+class Conv(nn.Module):      # original Conv 1st Dec
     # Standard convolution
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super(Conv, self).__init__()
@@ -34,11 +72,102 @@ class Conv(nn.Module):
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, x):
+
         return self.act(self.bn(self.conv(x)))
+        
 
     def fuseforward(self, x):
         return self.act(self.conv(x))
-
+        
+#class Conv(nn.Module): # 1st Dec eval troubleshoot conv 
+#    # Standard convolution
+#    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
+#        super(Conv, self).__init__()
+#        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
+#        self.bn = nn.BatchNorm2d(c2)
+#        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+#
+#    def forward(self, x):       
+#        
+##        evalstat = 'with'
+#        #issitfocus = x.shape[3]  # 2nd Dec 2021 JEdits (better judge of layer no. is no. of channel)
+##        issitfocus = x.shape[1]
+#        #print(x.shape)
+#        #After knowing I saved the wrong array (2nd time Conv instead of 1st time conv)
+#        #if issitfocus == 12:
+#          #bloop4(x, "FOCConvbeforeConv ", evalstat)
+#        #if issitfocus == 272:
+#          #bloop4(x, "CatbeforeFoc4", evalstat)
+#          #bloop4(x, "SameornotBConv", evalstat)
+#        x = self.conv(x)       
+##        if issitfocus == 12:
+##          print("After Conv: " + str(x[0][0][0][0]))
+##          print("thisvariance?[0]: " + str(np.var(x[0][0].detach().cpu().numpy())))
+##          print("thismean?[0]: " + str(np.mean(x[0][0].detach().cpu().numpy())))
+##          #bloop4(x, "FOCConvafterConv ", evalstat)
+##          #BN0 = torch.nn.BatchNorm2d(64, affine=True)
+##          print("")
+##          weights, bias = self.bn.parameters()
+##          weight_init = torch.ones(48)
+##          bias_init = torch.zeros(48)
+##          mean_init = torch.rand(48) * 100
+##          var_init = torch.rand(48) * 100
+#          
+#          state_dict_0 = self.bn.state_dict()
+##          state_dict_0['weight'].copy_(weight_init)
+##          state_dict_0['bias'].copy_(bias_init)
+##          state_dict_0['running_mean'].copy_(mean_init)
+##          state_dict_0['running_var'].copy_(var_init)
+#          
+##          state_dict_0['weight'].copy_(weights)
+##          state_dict_0['bias'].copy_(bias)
+##          state_dict_0['running_mean'].copy_(self.bn.running_mean)
+##          state_dict_0['running_var'].copy_(self.bn.running_var)
+##
+##          print("weights[0]: " + str(weights[0]))
+##          print("statedicweights: " + str(state_dict_0['weight'][0]))
+##          print("bias[0]: " + str(bias[0]))
+##          print("statedictbias: " + str(state_dict_0['bias'][0]))
+##          print("mean[0]: " + str(self.bn.running_mean[0]))
+##          print("statedictmean: " + str(state_dict_0['running_mean'][0]))
+##          print(self.bn.running_mean[0])
+##          print("variance[0]: " + str(self.bn.running_var[0]))
+##          print("statedictvar: " + str(state_dict_0['running_var'][0]))
+##          print(self.bn.track_running_stats)
+#
+##          bloop4(weights, "BNWeights", evalstat)
+##          bloop4(bias,"BNBias", evalstat)
+##          bloop4(self.bn.running_mean,"BNMean", evalstat)
+##          bloop4(self.bn.running_var,"BNVar", evalstat)
+#        
+##        if issitfocus == 512:
+##          bloop4(x, "NOBNfocusConv4", evalstat)
+#        
+#        x = self.bn(x)
+##        if issitfocus==512:
+##          bloop4(x, "NOBNfocusBN", evalstat)
+#
+#
+#        
+##        if issitfocus == 12:
+##          #bloop4(x, "FOCConvafterBN ", evalstat)
+##          print("")
+##          print("")
+##          print("After BN: " + str(x[0][0][0][0]))
+#          
+#
+#          
+#        x = self.act(x)
+##        if issitfocus==512:
+##          bloop4(x, "NOBNfocusAct", evalstat)
+#        #if issitfocus == 12:
+#          #bloop4(x, "FOCConvafterACT ", evalstat)
+#        
+#        return x
+#        #return self.act(self.bn(self.conv(x)))
+#        
+#    def fuseforward(self, x):
+#        return self.act(self.conv(x))
 
 class Bottleneck(nn.Module):
     # Standard bottleneck
@@ -71,8 +200,23 @@ class BottleneckCSP(nn.Module):
         y2 = self.cv2(x)
         return self.cv4(self.act(self.bn(torch.cat((y1, y2), dim=1))))
 
-
-class C3(nn.Module):
+#----------------------------------------------------------------------------------Original C3 module--------------------------------------------
+#class C3(nn.Module):
+#    # CSP Bottleneck with 3 convolutions
+#    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+#        super(C3, self).__init__()
+#        c_ = int(c2 * e)  # hidden channels
+#        self.cv1 = Conv(c1, c_, 1, 1)
+#        self.cv2 = Conv(c1, c_, 1, 1)
+#        self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
+#        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+#        # self.m = nn.Sequential(*[CrossConv(c_, c_, 3, 1, g, 1.0, shortcut) for _ in range(n)])
+#
+#    def forward(self, x):
+#        
+#        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1)) 
+        
+class C3(nn.Module):             #-----------------------------------------------------JEdit C3 module------------------------------------------------
     # CSP Bottleneck with 3 convolutions
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(C3, self).__init__()
@@ -84,10 +228,48 @@ class C3(nn.Module):
         # self.m = nn.Sequential(*[CrossConv(c_, c_, 3, 1, g, 1.0, shortcut) for _ in range(n)])
 
     def forward(self, x):
-        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))
+        
+#        blah = self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1)) 
+#        print("THIS IS A C3 MODULE")
+#        print(blah.shape)
+#        return blah
+        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))        
+
+        
 
 
-class SPP(nn.Module):
+
+#class SPP(nn.Module):                                                                                #JunEdit_BLURPOOLSPP_V1<<<<----------------------
+#    # Spatial pyramid pooling layer used in YOLOv3-SPP
+#    def __init__(self, c1, c2, k=(5, 9, 13)):
+#        super(SPP, self).__init__()
+#        c_ = c1 // 2  # hidden channels
+#        self.cv1 = Conv(c1, c_, 1, 1)
+#        self.mp = nn.MaxPool2d(kernel_size=3, stride=1, padding = 3//2)                              #JunEdit here -------------------------
+#        self.cv2 = Conv(c_ * (len(k) + 1), c2, 1, 1) 
+#        #print("this is where c2 and c_... is")
+#        #print(c_ * (len(k) + 1))
+#        #print(c2)   
+#        #print(c_)    
+#        self.m = nn.ModuleList([BlurPool(channels = c_, filt_size=x, stride=1, pad_off=x // 2) for x in k])
+#        #self.n = nn.ModuleList()                                                                              #JunEdit here-----------------
+#
+#    def forward(self, x):  
+#        #print("COME HERE?")                                                                    
+#        x = self.cv1(x)
+#        #print("comhere 1")
+#        #print(x.shape) 
+#        x = self.mp(x)   
+#        #print("comhere 2")
+#        #print(x.shape)                                                              
+#        #return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))                                  #JunEdit here------------------          
+#        output = self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))                                 #JEdit--------------------
+#        #print(output.shape)                                                                           #JEdit--------------------
+#        return output
+ 
+ 
+ 
+class SPP(nn.Module):                                                                                  #ORIGINAL SPP<<<<<<----------------------------
     # Spatial pyramid pooling layer used in YOLOv3-SPP
     def __init__(self, c1, c2, k=(5, 9, 13)):
         super(SPP, self).__init__()
@@ -97,20 +279,185 @@ class SPP(nn.Module):
         self.m = nn.ModuleList([nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k])
 
     def forward(self, x):
+        
         x = self.cv1(x)
         return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))
+        
+#class SPP(nn.Module):                                                                                  #BlurPool SPP_V2<<<<<<--------------------------
+#    # Spatial pyramid pooling layer used in YOLOv3-SPP
+#    def __init__(self, c1, c2, k=(5, 9, 13)):
+#        super(SPP, self).__init__()
+#        c_ = c1 // 2  # hidden channels
+#        self.cv1 = Conv(c1, c_, 1, 1)
+#        self.cv2 = Conv(c_ * (len(k) + 1), c2, 1, 1)
+#        self.b = nn.ModuleList([BlurPool(channels = c_, filt_size=x, stride=1, pad_off=x // 2) for x in k])
+#        self.m = nn.ModuleList([nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k])
+#        self.k = k
+#
+#    def forward(self, x):
+#        x = self.cv1(x)
+#        #return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))
+#        x = self.cv2(torch.cat([x] + [self.b[i](self.m[i](x)) for i in range(len(self.k))], 1))
+#        return x
+        
+               
+#class SPP(nn.Module):
+#    # Spatial pyramid pooling layer used in YOLOv3-SPP
+#    def __init__(self, c1, c2, k=(5, 9, 13)):
+#        super(SPP, self).__init__()
+#        c_ = c1 // 2  # hidden channels
+#        self.cv1 = Conv(c1, c_, 1, 1)
+#        self.cv2 = Conv(c_ * (len(k) + 1), c2, 1, 1)
+#        
+#        self.m = nn.ModuleList([nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k])
+#        #self.n = nn.ModuleList()                                                                              #JunEdit here-----------------
+#
+#    def forward(self, x):   
+#        #sprint("original")
+#        #print(x.shape)                                                                   
+#        x = self.cv1(x)  
+#        #print(" x self.cv1(x)")
+#        #print(x.shape)                                                                
+#        #return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))                                  #JunEdit here------------------          
+#        output = self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))   
+#        print("OUTPUT")                              #JEdit--------------------
+#        print(output.shape)                                                                           #JEdit--------------------
+#        return output
+        
+#class SPP(nn.Module):
+    ## Spatial pyramid pooling layer used in YOLOv3-SPP
+    #def __init__(self, c1, c2, k=(5, 9, 13)):
+        #super(SPP, self).__init__()
+        #c_ = c1 // 2  # hidden channels
+        #self.cv1 = Conv(c1, c_, 1, 1)
+        #self.cv2 = Conv(c_ * (len(k) + 1), c2, 1, 1)
+        
+        #self.m = nn.ModuleList([nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k])
+        ##self.n = nn.ModuleList()                                                                              #JunEdit here-----------------
 
+    #def forward(self, x):                                                                      
+        #x = self.cv1(x)                                                                  
+        ##return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))                                  #JunEdit here------------------          
+        #output = self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))                                 #JEdit--------------------
+        #print(output.shape)                                                                           #JEdit--------------------
+        #return output
+        
+class BlurPool(nn.Module):
+    def __init__(self, channels, pad_type='zero', filt_size=2, stride=2, pad_off=0):
+        super(BlurPool, self).__init__()
+        self.filt_size = filt_size
+        self.pad_sizes = pad_off
+        self.stride = stride
+        self.off = int((self.stride-1)/2.)
+        self.channels = channels
 
-class Focus(nn.Module):
-    # Focus wh information into c-space
+        if(self.filt_size==1):
+            a = np.array([1.,])
+        elif(self.filt_size==2):
+            a = np.array([1., 1.])
+        elif(self.filt_size==3):
+            a = np.array([1., 2., 1.])
+        elif(self.filt_size==4):    
+            a = np.array([1., 3., 3., 1.])
+        elif(self.filt_size==5):    
+            a = np.array([1., 4., 6., 4., 1.])
+        elif(self.filt_size==6):    
+            a = np.array([1., 5., 10., 10., 5., 1.])
+        elif(self.filt_size==7):    
+            a = np.array([1., 6., 15., 20., 15., 6., 1.])
+        elif(self.filt_size==9):
+            a = np.array([1., 8., 28., 56., 70., 56., 28., 8., 1.])
+        elif(self.filt_size==13):
+            a = np.array([1., 12., 66., 220., 495., 792., 924., 792., 495., 220., 66., 12., 1.])
+            
+
+        filt = torch.Tensor(a[:,None]*a[None,:])
+        filt = filt/torch.sum(filt)
+        self.register_buffer('filt', filt[None,None,:,:].repeat((self.channels,1,1,1)))
+
+        self.pad = get_pad_layer(pad_type)(self.pad_sizes)
+        #print("pad size")
+        #print(self.pad_sizes)
+        #print("supposed pad size")
+        #print(5//2)
+        #print(9//2)
+        #print(13//2)
+
+    def forward(self, inp):
+        if(self.filt_size==1):
+            if(self.pad_off==0):
+                return inp[:,:,::self.stride,::self.stride]    
+            else:
+                return self.pad(inp)[:,:,::self.stride,::self.stride]
+        else:
+            return nn.functional.conv2d(self.pad(inp), self.filt, stride=self.stride, groups=inp.shape[1])
+
+def get_pad_layer(pad_type):
+    if(pad_type in ['refl','reflect']):
+        PadLayer = nn.ReflectionPad2d
+    elif(pad_type in ['repl','replicate']):
+        PadLayer = nn.ReplicationPad2d
+    elif(pad_type=='zero'):
+        PadLayer = nn.ZeroPad2d
+    else:
+        print('Pad type [%s] not recognized'%pad_type)
+    return PadLayer
+
+class Focus(nn.Module):   # original Focus 1st Dec 2021
+     #Focus wh information into c-space
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super(Focus, self).__init__()
         self.conv = Conv(c1 * 4, c2, k, s, p, g, act)
-        # self.contract = Contract(gain=2)
+         #self.contract = Contract(gain=2)
 
     def forward(self, x):  # x(b,c,w,h) -> y(b,4c,w/2,h/2)
-        return self.conv(torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1))
-        # return self.conv(self.contract(x))
+        x = self.conv(torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1))   
+#        print("X SHAPE--------------------")
+#        print(x.shape)
+        for i in range(10):     # feature map visualization Jan 2022
+          bloop = x[0][i].detach().cpu().numpy()
+          plt.imsave('visualization/featuremapvis_repre/firstlayer_nomosaic/detect_1440_{channel}.png'.format(channel = i), bloop)
+           
+        return x   
+      
+    
+class DilateFocus(nn.Module):   # dilated Focus for representation training 13th January 2021
+     #Focus wh information into c-space
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
+        super(DilateFocus, self).__init__()
+        #self.conv = Conv(c1 * 4, c2, k, s=1, padding = 2, dilation = 2, g, act)
+        self.conv = nn.Conv2d(c1*4, c2, k, s, padding = 15, dilation = 15, groups=g, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+        #self.contract = Contract(gain=2)
+
+    def forward(self, x):  # x(b,c,w,h) -> y(b,4c,w/2,h/2)
+           
+        return self.act(self.bn(self.conv(torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1))))
+         #return self.conv(self.contract(x))
+
+#class Focus(nn.Module):   # edited but forgot reason
+#    # Focus wh information into c-space
+#    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
+#        super(Focus, self).__init__()
+#        self.conv = Conv(c1 * 4, c2, k, s, p, g, act)
+#        # self.contract = Contract(gain=2)
+#
+#    def forward(self, x):  # x(b,c,w,h) -> y(b,4c,w/2,h/2)
+#           
+#        #bloop4(x,"FocusBeforeCAT","without")   
+#        x = torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1)
+#        #bloop4(x,"FocusAfterCAT","without") 
+#        #bloop4(x, "SameornotBConvatFocus", "without")
+#        #print(x.shape)
+#        x = self.conv(x)
+#        #bloop4(x,"FocusAfterConv","with")
+#        #bloop4(x,"FocusAfterConvv2","without")
+#        return x
+#        
+#        #return self.conv(torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1))
+#  
+#        # return self.conv(self.contract(x))
 
 
 class Contract(nn.Module):
@@ -149,7 +496,56 @@ class Concat(nn.Module):
 
     def forward(self, x):
         return torch.cat(x, self.d)
+        
+class ConcatvWeights(nn.Module):                                                       #Jun edit (Copy the whole Concat function & call it ConcatPixel)
+    # Concatenate a list of tensors along dimension
+    def __init__(self, dimension=1):
+        super(ConcatvWeights, self).__init__()
+        self.d = dimension
+        self.conv = nn.Conv1d(1, 1, 2, padding=1, stride = 2)        
+        self.relu = nn.LeakyReLU(0.1)
+        self.hardsig = nn.Hardsigmoid()
 
+    def forward(self, x):
+        xmean = []
+        for i in range(len(x)):
+          xmean.append(x[i].mean())
+        xmean =  torch.tensor(xmean).reshape(1,1,1,2)
+        if x[i].is_cuda:
+          xmean = xmean.cuda()
+        xconv = self.conv(xmean[0])
+        weight = self.conv.weight.data.cpu().numpy()
+        
+        #print("weight")
+        #print(weight)
+        xrelu = self.relu(xconv)
+        xweight = self.hardsig(xrelu)
+        #print(xweight.shape)
+        #print(xweight)
+        for i in range(len(x)):
+          x[i] = torch.multiply(x[i],xweight[0][0][i])
+          
+#        print("")
+#        print("COMMON CONCAT V WEIGHTS SIZE")
+#        print(x[0].size())
+#        print(x[1].size())
+#        print(self.d)
+#        #print(x.size)
+#        #print(self.d.size)
+#        print("")
+        
+        return torch.cat(x, self.d)   
+            
+
+class ConcatPixel(nn.Module):                                                          #Jun edit (Copy the whole Concat function & call it ConcatPixel)
+    # Concatenate a list of tensors along dimension
+    def __init__(self, dimension=1):
+        super(ConcatPixel, self).__init__()
+        self.d = dimension
+
+    def forward(self, x):
+        
+        return torch.cat(x, self.d)
 
 class NMS(nn.Module):
     # Non-Maximum Suppression (NMS) module

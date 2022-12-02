@@ -238,16 +238,29 @@ def xywhn2xyxy(x, w=640, h=640, padw=32, padh=32):
 def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None):
     # Rescale coords (xyxy) from img1_shape to img0_shape
     if ratio_pad is None:  # calculate from img0_shape
+        #print("RATIO PAD ACTIVATED")
         gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])  # gain  = old / new
         pad = (img1_shape[1] - img0_shape[1] * gain) / 2, (img1_shape[0] - img0_shape[0] * gain) / 2  # wh padding
     else:
+        #print("RATIO PAD NOT ACTIVATED")
         gain = ratio_pad[0][0]
         pad = ratio_pad[1]
-
+    
+#    print("")
+#    print("utils.general.py 26th September 2022")
+#    print("gain")
+#    print(gain)
+#    print("pad")
+#    print(pad)
+#    print("coords")
+#    print(coords)
+#    print("img0_shape")
+#    print(img0_shape)
     coords[:, [0, 2]] -= pad[0]  # x padding
     coords[:, [1, 3]] -= pad[1]  # y padding
     coords[:, :4] /= gain
     clip_coords(coords, img0_shape)
+
     return coords
 
 
@@ -337,14 +350,21 @@ def wh_iou(wh1, wh2):
     return inter / (wh1.prod(2) + wh2.prod(2) - inter)  # iou = inter / (area1 + area2 - inter)
 
 
-def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=None, agnostic=False, labels=()):
+def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=None, agnostic=False, labels=(), angle_out = []):
     """Performs Non-Maximum Suppression (NMS) on inference results
 
     Returns:
          detections with shape: nx6 (x1, y1, x2, y2, conf, cls)
     """
+#    print("")
+#    print("angle_out ln347")
+#    print(angle_out.shape)  
+#    print("prediction shape")
+#    print(prediction.shape)
+#    print("")
 
     nc = prediction.shape[2] - 5  # number of classes
+    #print("")
     xc = prediction[..., 4] > conf_thres  # candidates
 
     # Settings
@@ -358,11 +378,28 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
 
     t = time.time()
     output = [torch.zeros((0, 6), device=prediction.device)] * prediction.shape[0]
+    
+    if isinstance(angle_out, list) == False:
+      output_ag = [torch.zeros((0, 1), device=prediction.device)] * prediction.shape[0]
+    
     for xi, x in enumerate(prediction):  # image index, image inference
         # Apply constraints
         # x[((x[..., 2:4] < min_wh) | (x[..., 2:4] > max_wh)).any(1), 4] = 0  # width-height
+        
         x = x[xc[xi]]  # confidence
-
+        
+#        print("")
+#        print("xc[xi]")
+#        print(xc[xi])
+#        print("")
+#        
+        if isinstance(angle_out, list) == False:
+          ac = angle_out[xi][xc[xi]]
+#          print("")
+#          print("ac ln380")
+#          print(ac)
+#          print("")
+        
         # Cat apriori labels if autolabelling
         if labels and len(labels[xi]):
             l = labels[xi]
@@ -384,14 +421,43 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
 
         # Detections matrix nx6 (xyxy, conf, cls)
         if multi_label:
+            
             i, j = (x[:, 5:] > conf_thres).nonzero(as_tuple=False).T
+#            print("")
+#            print("x")
+#            print(x.shape)
+#            print(x[:,:5])
+#            print("i")
+#            print(i[:6])
+#            print("j")
+#            print(j[:6])
+#            print("")
             x = torch.cat((box[i], x[i, j + 5, None], j[:, None].float()), 1)
+#            print("x")
+#            print(x.shape)
+            
+            
+            if isinstance(angle_out, list) == False:
+              ac = ac[i]
+
+              
         else:  # best class only
-            conf, j = x[:, 5:].max(1, keepdim=True)
+#            print("daheq is wrong")
+#            print(x[:, 5:].shape)
+            conf, j = x[:, 4:].max(1, keepdim=True)  # 17th May 2022... I have changed x[:, 5:] into x[:, 4], seems to cancel out the error
             x = torch.cat((box, conf, j.float()), 1)[conf.view(-1) > conf_thres]
+
+            if isinstance(angle_out, list) == False:
+              ac = ac[conf.view(-1) > conf_thres]
+              
+#              print("")
+#              print("ac ln415")
+#              print(ac)
+#              print("")
 
         # Filter by class
         if classes is not None:
+
             x = x[(x[:, 5:6] == torch.tensor(classes, device=x.device)).any(1)]
 
         # Apply finite constraint
@@ -403,28 +469,62 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
         if not n:  # no boxes
             continue
         elif n > max_nms:  # excess boxes
-            x = x[x[:, 4].argsort(descending=True)[:max_nms]]  # sort by confidence
 
-        # Batched NMS
-        c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes
+            x = x[x[:, 4].argsort(descending=True)[:max_nms]]  # sort by confidence
+            if isinstance(angle_out, list) == False:
+              ac = ac[x[:, 4].argsort(descending=True)[:max_nms]]
+            
+
+        # Batched NMS              
+        c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes       
         boxes, scores = x[:, :4] + c, x[:, 4]  # boxes (offset by class), scores
         i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
-        if i.shape[0] > max_det:  # limit detections
+        
+        if i.shape[0] > max_det:  # limit detections            
             i = i[:max_det]
+            
         if merge and (1 < n < 3E3):  # Merge NMS (boxes merged using weighted mean)
             # update boxes as boxes(i,4) = weights(i,n) * boxes(n,4)
             iou = box_iou(boxes[i], boxes) > iou_thres  # iou matrix
             weights = iou * scores[None]  # box weights
             x[i, :4] = torch.mm(weights, x[:, :4]).float() / weights.sum(1, keepdim=True)  # merged boxes
+
             if redundant:
                 i = i[iou.sum(1) > 1]  # require redundancy
 
+
         output[xi] = x[i]
+#        print("")
+#        print(" i and ac and shape")
+#        print(i.shape)
+#        print(ac.shape)
+#        print(x.shape)
+#        print("")
+        if isinstance(angle_out, list) == False:
+          output_ag[xi] = ac[i]
+
+#        print("")
+#        print("general.py")
+#        print("output_ag")
+#        print(output_ag)
+#        print("ac")
+#        print(ac)
+#        print("")
+
         if (time.time() - t) > time_limit:
             print(f'WARNING: NMS time limit {time_limit}s exceeded')
             break  # time limit exceeded
-
-    return output
+    
+    if isinstance(angle_out, list)==False:
+#      print("")
+#      print("last check")
+#      print(output[0].shape)
+#      print(output_ag[0].shape)
+#      print("")
+      return output, output_ag
+      
+    if isinstance(angle_out, list):
+      return output
 
 
 def strip_optimizer(f='weights/best.pt', s=''):  # from utils.general import *; strip_optimizer()

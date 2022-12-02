@@ -6,6 +6,8 @@ import random
 import time
 from pathlib import Path
 from threading import Thread
+import matplotlib.pyplot as plt
+import cv2
 
 import numpy as np
 import torch.distributed as dist
@@ -30,11 +32,42 @@ from utils.general import labels_to_class_weights, increment_path, labels_to_ima
     check_requirements, print_mutation, set_logging, one_cycle, colorstr
 from utils.google_utils import attempt_download
 from utils.loss import ComputeLoss
-from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
+from utils.plots import plot_images, plot_labels, plot_results, plot_results_angle, plot_evolution
 from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first
 
 logger = logging.getLogger(__name__)
 
+def convert(size, x, y, w, h):
+    box = np.zeros(4)
+    dw = 1. / size[0]
+    dh = 1. / size[1]
+    x = x / dw
+    w = w / dw
+    y = y / dh
+    h = h / dh
+#    print("what's up with box")
+#    print(box[0])
+#    print(x)
+#    print(w)
+    box[0] = x - (w / 2.0)
+    box[1] = x + (w / 2.0)
+    box[2] = y - (h / 2.0)
+    box[3] = y + (h / 2.0)
+
+    return (box)
+    
+def drawondoobyxy(dooby, doobyx):    
+    btarget = dooby[1][1]
+    for bloopy in range(0,btarget.shape[0]):
+      bget = btarget[bloopy]
+      
+      if bget[0] == 0:
+
+        bb = convert(dooby[1][0].shape[2:], bget[2], bget[3], bget[4], bget[5])
+        
+        cv2.rectangle(doobyx, (int(round(bb[0])), int(round(bb[2]))), (int(round(bb[1])), int(round(bb[3]))), (0, 0, 255),1)
+
+    return doobyx
 
 def train(hyp, opt, device, tb_writer=None, wandb=None):
     logger.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
@@ -70,20 +103,21 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
     # Model
     pretrained = weights.endswith('.pt')
+    channels = 6 if opt.schannel else 3
     if pretrained:
         with torch_distributed_zero_first(rank):
             attempt_download(weights)  # download if not found locally
         ckpt = torch.load(weights, map_location=device)  # load checkpoint
         if hyp.get('anchors'):
             ckpt['model'].yaml['anchors'] = round(hyp['anchors'])  # force autoanchor
-        model = Model(opt.cfg or ckpt['model'].yaml, ch=3, nc=nc).to(device)  # create
+        model = Model(opt.cfg or ckpt['model'].yaml, ch=channels, nc=nc).to(device)  # create
         exclude = ['anchor'] if opt.cfg or hyp.get('anchors') else []  # exclude keys
         state_dict = ckpt['model'].float().state_dict()  # to FP32
         state_dict = intersect_dicts(state_dict, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(state_dict, strict=False)  # load
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
-        model = Model(opt.cfg, ch=3, nc=nc).to(device)  # create
+        model = Model(opt.cfg, ch=channels, nc=nc).to(device)  # create
 
     # Freeze
     freeze = []  # parameter names to freeze (full or partial)
@@ -101,6 +135,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
     pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
     for k, v in model.named_modules():
+
         if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
             pg2.append(v.bias)  # biases
         if isinstance(v, nn.BatchNorm2d):
@@ -120,7 +155,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
     # Scheduler https://arxiv.org/pdf/1812.01187.pdf
     # https://pytorch.org/docs/stable/_modules/torch/optim/lr_scheduler.html#OneCycleLR
-    lf = one_cycle(1, hyp['lrf'], epochs)  # cosine 1->hyp['lrf']
+    lf = one_cycle(1, hyp['lrf'], epochs)  # cosine 1->hyp['lrf']                                                                                       
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
     # plot_lr_scheduler(optimizer, scheduler, epochs)
 
@@ -161,6 +196,13 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
     gs = int(model.stride.max())  # grid size (max stride)
     nl = model.model[-1].nl  # number of detection layers (used for scaling hyp['obj'])
     imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
+    
+    #edit 19th April
+    #print("PRINTING ANCHOR PIXEL SIZES")
+    #m = model.model[-1]
+    #print(m.anchor_grid.view(-1,2))
+    #edit ends
+    
 
     # DP mode
     if cuda and rank == -1 and torch.cuda.device_count() > 1:
@@ -179,10 +221,60 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
         model = DDP(model, device_ids=[opt.local_rank], output_device=opt.local_rank)
 
     # Trainloader
+#    print("IMGSZTEST--------------------IMFSZTEST-------------------------------------")  #<---------------JTroubleshoot (concat mismatch)-------
+#    print(imgsz_test)
+#    print("IMGSZENDS--------------------IMGSIZEENDS-----------------------------------")  #<---------------JTroubleshoot (concat mismatch)-------
+    #bloopy1 8th January 2021
     dataloader, dataset = create_dataloader(train_path, imgsz, batch_size, gs, opt,
                                             hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
                                             world_size=opt.world_size, workers=opt.workers,
-                                            image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '))
+                                            image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '), schannel = opt.schannel, angle = opt.angle, whichclass = opt.trainclass)
+#    print("WHAT DOES DATALOADER RETURN? 6channel starts 7th January--------------------------------")
+#    
+#    bloop = enumerate(dataloader)
+#    next(bloop)
+#    dooby = next(bloop)
+#    
+#    print(len(dooby[1]))
+#    if opt.schannel == True:
+#     path1 = 'visualization/6channel/6_bloop_v1.png'
+#     path2 = 'visualization/6channel/6_bloop_v2.png'
+#     doobyx = dooby[1][0][0][:3, :, :].detach().cpu().numpy()
+#     doobyx = doobyx.swapaxes(0, 2)
+#     doobyx = doobyx.swapaxes(0, 1)
+#     doobyy = dooby[1][0][0][3:6, :, :].detach().cpu().numpy()
+#     doobyy = doobyy.swapaxes(0, 2)
+#     doobyy = doobyy.swapaxes(0, 1)
+#     doobyx = cv2.UMat(doobyx)
+#     doobyy = cv2.UMat(doobyy)
+#     drawondoobyxy(dooby,doobyx)
+#     drawondoobyxy(dooby,doobyy)
+#     cv2.imwrite( path1, doobyx)  
+#     cv2.imwrite( path2, doobyy)  
+#     
+#    else:
+#     path1 = 'visualization/6channel/rgb_bloop_v1.png'
+#     doobyx = dooby[1][0][0][:3, :, :].detach().cpu().numpy()
+#     doobyx = doobyx.swapaxes(0, 2)
+#     doobyx = doobyx.swapaxes(0, 1)
+#     doobyx = cv2.UMat(doobyx)
+#     drawondoobyxy(dooby,doobyx)
+#     cv2.imwrite( path1, doobyx)   
+#      
+##    print(doobyx.shape)
+##    plt.imsave( path1, doobyx)
+##    print(dooby[1][0].shape) #torch.Size([8, 3, 640, 640])
+#    #print(next(bloop))
+#    print("---------------------------------")
+#
+#
+#    print(dooby[1][1])
+#    print(dooby[1][1].shape) # (43, 6)
+#    print("--------------------------DATALOADER  ENNNDS  RETURN? 6channel ends 7th January--------------------------------")
+
+
+     
+
     mlc = np.concatenate(dataset.labels, 0)[:, 0].max()  # max label class
     nb = len(dataloader)  # number of batches
     assert mlc < nc, 'Label class %g exceeds nc=%g in %s. Possible class labels are 0-%g' % (mlc, nc, opt.data, nc - 1)
@@ -190,11 +282,59 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
     # Process 0
     if rank in [-1, 0]:
         ema.updates = start_epoch * nb // accumulate  # set EMA updates
+        
+        # bloopy2
+        print("")
+        print("train.py")
+        print(opt.whichclass)
+        print("")
         testloader = create_dataloader(test_path, imgsz_test, total_batch_size, gs, opt,  # testloader
                                        hyp=hyp, cache=opt.cache_images and not opt.notest, rect=True, rank=-1,
                                        world_size=opt.world_size, workers=opt.workers,
-                                       pad=0.5, prefix=colorstr('val: '))[0]
+                                       pad=0.5, prefix=colorstr('val: '), schannel = opt.schannel, angle = opt.angle, whichclass = opt.whichclass)[0]
 
+#        print("WHAT DOES TESTLOADER RETURN?---------6channel starts 7th January-----------------------")
+#    
+#        bloop = enumerate(testloader)
+#        next(bloop)
+#        dooby = next(bloop)
+#        
+#        print(len(dooby[1]))
+#        if opt.schannel == True:
+#         path1 = 'visualization/6channel/6_bloop_testv1.png'
+#         path2 = 'visualization/6channel/6_bloop_testv2.png'
+#         doobyx = dooby[1][0][0][:3, :, :].detach().cpu().numpy()
+#         doobyx = doobyx.swapaxes(0, 2)
+#         doobyx = doobyx.swapaxes(0, 1)
+#         doobyy = dooby[1][0][0][3:6, :, :].detach().cpu().numpy()
+#         doobyy = doobyy.swapaxes(0, 2)
+#         doobyy = doobyy.swapaxes(0, 1)
+#         doobyx = cv2.UMat(doobyx)
+#         doobyy = cv2.UMat(doobyy)
+#         drawondoobyxy(dooby,doobyx)
+#         drawondoobyxy(dooby,doobyy)
+#         cv2.imwrite( path1, doobyx)  
+#         cv2.imwrite( path2, doobyy)
+#         
+#        else:
+#         path1 = 'visualization/6channel/rgb_bloop_testv1.png'
+#         doobyx = dooby[1][0][0][:3, :, :].detach().cpu().numpy()
+#         doobyx = doobyx.swapaxes(0, 2)
+#         doobyx = doobyx.swapaxes(0, 1)
+#         doobyx = cv2.UMat(doobyx)
+#         drawondoobyxy(dooby,doobyx)
+#         cv2.imwrite( path1, doobyx)
+#         
+#        print("---------------------------------")
+#
+#
+#        print(dooby[1][1])
+#        print(dooby[1][1].shape) # (43, 6)
+#        print("--------------------------TESTLOADER  ENNNDS  RETURN?------------6channel starts 7th January--------------------")
+          
+        
+        
+        
         if not opt.resume:
             labels = np.concatenate(dataset.labels, 0)
             c = torch.tensor(labels[:, 0])  # classes
@@ -207,6 +347,10 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
             # Anchors
             if not opt.noautoanchor:
+#                print("----------------------CHECK DATASET DIFFF---------------------")
+#                
+#                print(dataset.shapes)
+#                print("---------------------------DIFF ENDS------------------------------")
                 check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)
 
     # Model parameters
@@ -234,9 +378,12 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                 f'Starting training for {epochs} epochs...')
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()
+        #model.eval()
+        
 
         # Update image weights (optional)
         if opt.image_weights:
+
             # Generate indices
             if rank in [-1, 0]:
                 cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # class weights
@@ -252,17 +399,57 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
         # Update mosaic border
         # b = int(random.uniform(0.25 * imgsz, 0.75 * imgsz + gs) // gs * gs)
         # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
-
-        mloss = torch.zeros(4, device=device)  # mean losses
+        if opt.angle == False:
+          mloss = torch.zeros(4, device=device)  # mean losses
+        if opt.angle:
+          mloss = torch.zeros(5, device=device)  # mean losses
         if rank != -1:
             dataloader.sampler.set_epoch(epoch)
         pbar = enumerate(dataloader)
-        logger.info(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'targets', 'img_size'))
+        #logger.info(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'targets', 'img_size')) # the original
+        
+        
+        logger.info(('\n' + '%13s' * 9) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'angle', 'targets', 'img_size'))
         if rank in [-1, 0]:
-            pbar = tqdm(pbar, total=nb)  # progress bar
+            pbar = tqdm(pbar, total=nb, position = 0, leave = True)  # progress bar -----------------------------Jedit position + leave
         optimizer.zero_grad()
-        for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+        
+        #for g in optimizer.param_groups:  #----------------------------------------------------------------------JEeditOptimizer_14thSept2021----------
+          ##g['lr'] = 0.001
+          #print("LEARNING RATE")
+          #print(g['lr'])
+          #print("EPOCHS")
+          #print(epoch)
+          
+        for i, (imgs, targets, paths, _, *angle) in pbar:  # batch -------------------------------------------------------------
+#            print("  ")                                #----------------------------JEdit tryna find where dem labels are_6thOctober2021 -------------
+#            print("I just wanna find out wtf is the path")
+#            print(paths)
+#            print(len(paths))
+#            print(len(targets))
+#            print(targets)        
+#            print("")
+#            print("hello angle train.py")
+#            print(angle)
+#            print("")
             ni = i + nb * epoch  # number integrated batches (since train start)
+
+#            smallt = 0      #----------------------------------------------------------------------------------JEdit getting TRatio 15th_Sept2021-----
+#            tratio = 0           
+#            if len(targets) !=0:
+#              for g in targets:
+#                if g[-1]*g[-2] < 0.01:
+#                  smallt+=1
+#              tratio = smallt/len(targets)       
+#            for i, g in enumerate(optimizer.param_groups):
+#              if tratio!=0 and i ==1:
+#                g['lr'] = g['lr']*(1+tratio)
+##                print('')
+##                print("epochs: " + str(epoch)) 
+##                print('multiplied glr')
+##                print(g['lr'])
+##----------------------------------------------------------------------------------JEdit getting TRatio 15th_Sept2021-----ENDS------------------------
+           
             imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
 
             # Warmup
@@ -287,7 +474,20 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
             # Forward
             with amp.autocast(enabled=cuda):
                 pred = model(imgs)  # forward
-                loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+#                print("")
+#                print("THIS IS TARGETS FROM TRAIN.PY")
+#                print(targets.shape)
+                #print(targets)
+                #print("")
+#                print("AND THIS IS ANGLE")
+#                print(angle)
+#                print("")
+#                print("AND THIS IS PRED")
+#                print(pred[0].shape)
+#                print("")
+
+                placeh = False
+                loss, loss_items, *angdiff = compute_loss(pred, targets.to(device), angle, False)  # loss scaled by batch_size # 21st Feb angle added #14th March whichclass added
                 if rank != -1:
                     loss *= opt.world_size  # gradient averaged between devices in DDP mode
                 if opt.quad:
@@ -295,27 +495,59 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
             # Backward
             scaler.scale(loss).backward()
+            
+#            for i, g in enumerate(optimizer.param_groups):                                  #Jedit change back lr 16thSept2021------------------------
+#              if tratio!=0 and i ==1:
+#                g['lr'] = g['lr']/(1+tratio)
+##                print('')
+##                print("epochs: " + str(epoch))
+##                print("divided lr")
+##                print(g['lr']) 
+# #Jedit change back lr 16thSept2021------------------------ENDS--------------------------------------------------------------------------------
 
             # Optimize
             if ni % accumulate == 0:
-                scaler.step(optimizer)  # optimizer.step
+                scaler.step(optimizer)  # optimizer.step #unscales the gradients, if it doesn't contain NaN, update optimizer
                 scaler.update()
                 optimizer.zero_grad()
                 if ema:
                     ema.update(model)
+                               
+                       
 
             # Print
             if rank in [-1, 0]:
+
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
+#                print("")
+#                print("*mloss")
+#                print(*mloss)
+#                print("")
                 mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-                s = ('%10s' * 2 + '%10.4g' * 6) % (
-                    '%g/%g' % (epoch, epochs - 1), mem, *mloss, targets.shape[0], imgs.shape[-1])
+                
+                if opt.angle == False:
+                  s = ('%10s' * 2 + '%10.4g' * 6) % (
+                    '%g/%g' % (epoch, epochs - 1), mem, *mloss, targets.shape[0], imgs.shape[-1])        # original
+                if opt.angle:
+                  s = ('%10s' * 2 + '%15g' * 7) % (
+                    '%g/%g' % (epoch, epochs - 1), mem, *mloss, targets.shape[0], imgs.shape[-1])     
                 pbar.set_description(s)
 
                 # Plot
-                if plots and ni < 3:
+                if plots and ni < 15: # bloopy14
                     f = save_dir / f'train_batch{ni}.jpg'  # filename
-                    Thread(target=plot_images, args=(imgs, targets, paths, f), daemon=True).start()
+                    
+                    if opt.angle == False:
+                      Thread(target=plot_images, args=(imgs, targets, paths, f), daemon=True).start()
+                    if opt.angle:
+#                      print("")
+#                      print("how does targets differ : train.py")
+#                      print(targets.shape)
+#                      print(targets[0])
+#                      print(targets.type())
+#                      print("")
+                      
+                      Thread(target=plot_images, args=(imgs, targets, paths, f, angle), daemon=True).start()
                     # if tb_writer:
                     #     tb_writer.add_image(f, result, dataformats='HWC', global_step=epoch)
                     #     tb_writer.add_graph(model, imgs)  # add model to tensorboard
@@ -328,6 +560,16 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
         # Scheduler
         lr = [x['lr'] for x in optimizer.param_groups]  # for tensorboard
+        
+#        for g in optimizer.param_groups:                                  #Jedit changed back lr 15thSept2021-----------------------------------------
+#              if tratio!=0:
+#                g['lr'] = g['lr']/(1+tratio)
+                #print('')
+                #print("epochs: " + str(epoch))
+                #print("divided lr")
+                #print(g['lr'])
+  
+              
         scheduler.step()
 
         # DDP process 0 or single-GPU
@@ -335,6 +577,8 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
             # mAP
             if ema:
                 ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'gr', 'names', 'stride', 'class_weights'])
+                
+                
             final_epoch = epoch + 1 == epochs
             if not opt.notest or final_epoch:  # Calculate mAP
                 results, maps, times = test.test(opt.data,
@@ -347,11 +591,16 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                                                  verbose=nc < 50 and final_epoch,
                                                  plots=plots and final_epoch,
                                                  log_imgs=opt.log_imgs if wandb else 0,
-                                                 compute_loss=compute_loss)
+                                                 compute_loss=compute_loss,
+                                                 angle_t = opt.angle,
+                                                 whichclass = opt.whichclass)
 
             # Write
             with open(results_file, 'a') as f:
-                f.write(s + '%10.4g' * 7 % results + '\n')  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
+                if opt.angle ==  False:
+                  f.write(s + '%10.4g' * 7 % results + '\n')  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
+                if opt.angle:
+                  f.write(s + '%10.4g' * 8 % results + '\n')  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
             if len(opt.name) and opt.bucket:
                 os.system('gsutil cp %s gs://%s/results/results%s.txt' % (results_file, opt.bucket, opt.name))
 
@@ -401,7 +650,10 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
         # Plots
         if plots:
-            plot_results(save_dir=save_dir)  # save as results.png
+            if opt.angle == False:
+              plot_results(save_dir=save_dir)  # save as results.png
+            if opt.angle:
+              plot_results_angle(save_dir = save_dir)
             if wandb:
                 files = ['results.png', 'confusion_matrix.png', *[f'{x}_curve.png' for x in ('F1', 'PR', 'P', 'R')]]
                 wandb.log({"Results": [wandb.Image(str(save_dir / f), caption=f) for f in files
@@ -464,6 +716,10 @@ if __name__ == '__main__':
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--quad', action='store_true', help='quad dataloader')
+    parser.add_argument('--schannel', action='store_true', help='switch to 6 channel dataloader, will definitely mosaic')
+    parser.add_argument('--angle', action='store_true', help='switch to include angle in training')
+    parser.add_argument('--whichclass', type=int, default=False, help='only do test of a certain class')
+    parser.add_argument('--trainclass', type=int, default=False, help='only do train of a certain class')
     opt = parser.parse_args()
 
     # Set DDP variables

@@ -28,11 +28,18 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir='.', names
     # Returns
         The average precision as computed in py-faster-rcnn.
     """
-
+    
+    #tp = tp[:,0:1]   # troubleshoot, delete later 19th March 2022
     # Sort by objectness
     i = np.argsort(-conf)
     tp, conf, pred_cls = tp[i], conf[i], pred_cls[i]
-
+#    print("")
+#    print("metrics.py")
+#    print("tp.shape----------------------------------------")
+#    print(tp[:,0])
+#    np.save('tp', tp[:,0])
+#    print(conf)
+#    print(type(tp))
     # Find unique classes
     unique_classes = np.unique(target_cls)
     nc = unique_classes.shape[0]  # number of classes, number of detections
@@ -51,15 +58,25 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir='.', names
             # Accumulate FPs and TPs
             fpc = (1 - tp[i]).cumsum(0)
             tpc = tp[i].cumsum(0)
-
+#            print("")
+#            print("metrics.py")
+#            print("fpc")
+#            np.save('fpc', fpc)
+#            print(fpc)
+#            print("tpc")
+#            np.save('tpc', tpc)
+#            print(tpc)
             # Recall
             recall = tpc / (n_l + 1e-16)  # recall curve
+            #np.save('recall', recall)
             r[ci] = np.interp(-px, -conf[i], recall[:, 0], left=0)  # negative x, xp because xp decreases
-
+            #np.save("r[ci]", r[ci])
+            #print(r[ci])
             # Precision
             precision = tpc / (tpc + fpc)  # precision curve
+            #np.save('precision', precision)
             p[ci] = np.interp(-px, -conf[i], precision[:, 0], left=1)  # p at pr_score
-
+            #np.save('pc[ci]', p[ci])
             # AP from recall-precision curve
             for j in range(tp.shape[1]):
                 ap[ci, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j])

@@ -16,7 +16,7 @@ from utils.torch_utils import select_device, load_classifier, time_synchronized
 
 
 def detect(save_img=False):
-    source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
+    source, weights, view_img, save_txt, imgsz, schannel = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size, opt.schannel
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
         ('rtsp://', 'rtmp://', 'http://'))
 
@@ -42,6 +42,7 @@ def detect(save_img=False):
         modelc = load_classifier(name='resnet101', n=2)  # initialize
         modelc.load_state_dict(torch.load('weights/resnet101.pt', map_location=device)['model']).to(device).eval()
 
+
     # Set Dataloader
     vid_path, vid_writer = None, None
     if webcam:
@@ -50,7 +51,7 @@ def detect(save_img=False):
         dataset = LoadStreams(source, img_size=imgsz, stride=stride)
     else:
         save_img = True
-        dataset = LoadImages(source, img_size=imgsz, stride=stride)
+        dataset = LoadImages(source, img_size=imgsz, stride=stride, schannel= schannel)
 
     # Get names and colors
     names = model.module.names if hasattr(model, 'module') else model.names
@@ -58,7 +59,8 @@ def detect(save_img=False):
 
     # Run inference
     if device.type != 'cpu':
-        model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
+        channels = 6 if opt.schannel else 3
+        model(torch.zeros(1, channels, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
     t0 = time.time()
     for path, img, im0s, vid_cap in dataset:
         img = torch.from_numpy(img).to(device)
@@ -70,14 +72,45 @@ def detect(save_img=False):
         # Inference
         t1 = time_synchronized()
         pred = model(img, augment=opt.augment)[0]
+        #------------------------------------------------------------------------------Jedit 12thOct2021------------------------------------
+#        pred2 = model(img)
+#        print("len(pred2):")
+#        print(len(pred2)
+#        print("pred.size():")
+#        print(pred.size())
+#        print("pred before any pred processing")
+#        print(pred[0])
+#        print("len(pred2[1]):")
+#        print(len(pred2[1]))
+#        print("pred[1][0].size():")
+#        print(pred2[1][0].size())
+#        print("pred[1][1].size():")
+#        print(pred2[1][1].size())
+#        print("pred[1][2].size():")
+#        print(pred2[1][2].size())
+#        print(pred2[0][0])
+#        print("pred2[1][0]")
+#        print(pred2[1][0])
+#        print("pred2[1][1]")
+#        print(pred2[1][1])
+#        print("pred2[1][2]")
+#        print(pred2[1][2])
+#        print(intentionalerror)
+        #------------------------------------------------------------------------------Jedit12thOct2021 ends---------------------------------
 
         # Apply NMS
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
+        #print("pred after nms")
+        #print(pred[0])
         t2 = time_synchronized()
 
         # Apply Classifier
         if classify:
             pred = apply_classifier(pred, modelc, img, im0s)
+#        print("pred after classify")
+#        print(len(pred))
+#        print(pred[0].shape)
+#        print(pred[0])
 
         # Process detections
         for i, det in enumerate(pred):  # detections per image
@@ -85,7 +118,14 @@ def detect(save_img=False):
                 p, s, im0, frame = path[i], '%g: ' % i, im0s[i].copy(), dataset.count
             else:
                 p, s, im0, frame = path, '', im0s, getattr(dataset, 'frame', 0)
+                if schannel == True:
+                 im0 = im0[:,:,0:3]
+                 
 
+#            print("pred after ???")
+#            print(pred[0])
+#            print("but this is det somehow")
+#            print(det[0])
             p = Path(p)  # to Path
             save_path = str(save_dir / p.name)  # img.jpg
             txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
@@ -93,24 +133,44 @@ def detect(save_img=False):
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
             if len(det):
                 # Rescale boxes from img_size to im0 size
+#                print("det.shape:")
+#                print(det.shape)
+#                print("det[0]")
+#                print(det[0])
                 det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
+#                print("IMAGE SHAPE, img, then im0")
+#                print(img.shape)
+#                print(im0.shape)
+#                print("det[0]")
+#                print(det[0])
+#                
 
                 # Print results
                 for c in det[:, -1].unique():
                     n = (det[:, -1] == c).sum()  # detections per class
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
+#                print("DET")
+#                print(det.shape)
+#                print(det)
                 # Write results
+
                 for *xyxy, conf, cls in reversed(det):
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
                         with open(txt_path + '.txt', 'a') as f:
                             f.write(('%g ' * len(line)).rstrip() % line + '\n')
-
+                   
                     if save_img or view_img:  # Add bbox to image
                         label = f'{names[int(cls)]} {conf:.2f}'
-                        plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
+                        
+                        if schannel == True:
+                          im0 = cv2.UMat(im0)   
+                        plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=1)
+
+                        
+                    
 
             # Print time (inference + NMS)
             print(f'{s}Done. ({t2 - t1:.3f}s)')
@@ -161,6 +221,7 @@ if __name__ == '__main__':
     parser.add_argument('--project', default='runs/detect', help='save results to project/name')
     parser.add_argument('--name', default='exp', help='save results to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
+    parser.add_argument('--schannel', action='store_true', help='switch to 6 channel dataloader, will definitely mosaic')
     opt = parser.parse_args()
     print(opt)
     check_requirements()

@@ -1,11 +1,19 @@
+#Yolo + UperNet V2!!! This is where the BatchNorm Edit to solve eval() problem is at, modified from yolo Upernet v1.py
+# validation and inference can't be done by batch due to calculating running stats for batchnorm
+# if you're looking for all the commented out feature map visualization code is also at v1
+#README FIRST!!!! MAKE SURE YOU ONLY USE 1 GPU TRAINING BECAUSE THE BATCHNORM2D ISN'T GOING TO BATCHNORM THE IMAGES IN THE OTHER GPU...
+
 import argparse
 import logging
 import sys
-import numpy as np
 from copy import deepcopy
 from pathlib import Path
-from matplotlib import pyplot as plt
-
+from PIL import Image
+import matplotlib.pyplot as plt
+import numpy as np
+from mit_semseg.config import cfg
+#from mit_semseg.lib.nn import SynchronizedBatchNorm2d
+#BatchNorm2d = SynchronizedBatchNorm2d
 sys.path.append('./')  # to run '$ python *.py' files in subdirectories
 logger = logging.getLogger(__name__)
 
@@ -25,117 +33,156 @@ except ImportError:
 class Detect(nn.Module):
     stride = None  # strides computed during build
     export = False  # onnx export
+    
+    
 
     def __init__(self, nc=80, anchors=(), ch=()):  # detection layer
         super(Detect, self).__init__()
+        
+        
+      
         self.nc = nc  # number of classes
-        self.no = nc + 5 + 1  # number of outputs per anchor (class probabilities, x,y,w,h + objectness score) #22nd Feb edit "+1" as angle information
+        self.no = nc + 5  # number of outputs per anchor
         self.nl = len(anchors)  # number of detection layers
         self.na = len(anchors[0]) // 2  # number of anchors
         self.grid = [torch.zeros(1)] * self.nl  # init grid
         a = torch.tensor(anchors).float().view(self.nl, -1, 2)
         self.register_buffer('anchors', a)  # shape(nl,na,2)
         self.register_buffer('anchor_grid', a.clone().view(self.nl, 1, -1, 1, 1, 2))  # shape(nl,1,na,1,1,2)
-        self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv   
+#        def conv3x3_bn_relu(in_planes, out_planes, stride=1):
+#          #"3x3 convolution + BN + relu"
+#          return nn.Sequential( nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False),nn.BatchNorm2d(out_planes),nn.ReLU(inplace=True),)
+          
+          #solve eval() here 5th Dec
+        self.conv1 = nn.Conv2d(1344, 256, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(256)
+        self.relu3 = nn.ReLU(inplace = True)
+        self.conv4 = nn.Conv2d(256, cfg.DATASET.num_class + 1, kernel_size=1)
+        
+        # the ones below is responsible for flattening the torch tensor so I can run mean on it
+        self.flatten = nn.Flatten(start_dim=2)
+        #solve eval() ends
+                
+          #return nn.Sequential( nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False),nn.ReLU(inplace=True),)
+        
+        # output conv for UperNet-----------------------------------------------------------------------------------------------------------------------
+        #self.conv_last = nn.Sequential( conv3x3_bn_relu(len(fpn_inplanes) * fpn_dim, fpn_dim, 1), nn.Conv2d(fpn_dim, num_class, kernel_size=1))
+        #self.conv_last = nn.Sequential( conv3x3_bn_relu(1344, 256, 1), nn.Conv2d(256, 151, kernel_size=1)) 
+        
+        
+        #self.conv_last = nn.Sequential( conv3x3_bn_relu(1344, 256, 1), nn.Conv2d(256, cfg.DATASET.num_class + 1, kernel_size=1))#change Conv2d output 15
+        #----------------------------UperNet ENDS-------------------------------------------------------------------------------------------------------
+        
+        self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv
+
+
+    
 
     def forward(self, x):
         # x = x.copy()  # for profiling
         z = []  # inference output
-        self.training |= self.export 
+        self.training |= self.export
         
-#        print("")
-#        print("quick query on x shape yolo.py 23rd September 2022")
-#        print(len(x))
+#        print("x and SHAPE")
 #        print(x[0].shape)
-#        print(x[1].shape)  
-#        print(x[2].shape)
-#        print("")      
+#        print(x[0][0])
         
+        
+        #for hum in range(10):
+          #plt.imsave('feature_mapVisualization/2ndlvloriTemp_{channel}.png'.format(channel = hum), x[1][0][hum].detach().cpu().numpy())
+          
+        #xmean = []
+        #for i in range(len(x)):
+          #xmean.append(x[i].mean())
+          
 
-#        print("YOLO.PY SEE IF THE X MATCH WITH REGISTERED HOOK 25th September")
-#        print(x[0][0][0][0])
+        #xmean =  torch.tensor(xmean).reshape(1,1,1,3)    #after this line it is in cuda
+        
+        #if x[i].is_cuda:
+          #xmean = xmean.cuda()
+
+       
+        #fusion liao immediately conv last sia, no need another self.m I think
+        # JEDIT 18th October 2021 -----------------------------UperNet----------------------------------------------------------------------------------
+        fusion_list = []
+        output_size = x[0].size()[2:]
+        for i in range(len(x)):
+          fusion_list.append(nn.functional.interpolate(x[i], output_size, mode = 'bilinear', align_corners = False))
+          
+        fusion_out = torch.cat(fusion_list,1)
+        
+        # 5th Dec last 123 should start here
+        #last = self.conv_last(fusion_out)   #the one that was commented out
+        conv1 = self.conv1(fusion_out)
+
+        #this part is where I start to calculate the variance and mean for batch norm during testing phase   
+        #print(torch.mean(t(input), dim = 2))   
+        if self.training == False:
+          state_dict_0 = self.bn2.state_dict()
+          # flatten the last 2 dimension
+          flatten = self.flatten(conv1)
+          mean_init = torch.mean(flatten, dim = 2)[0]
+          var_init = torch.var(flatten, dim = 2)[0]
+          # then calculate whatever dafeq you wanna calculate
+          state_dict_0['running_mean'].copy_(mean_init)
+          state_dict_0['running_var'].copy_(var_init)
+          
+        
+        bn2 = self.bn2(conv1)
+        relu3 = self.relu3(bn2)
+        last = self.conv4(relu3)
 
         
-        #featuremapVisualization---------------------------------------------------------------------------------------Jedit
-#        print(x[0].shape)
-#        print(x[2].shape)
-#        print(x[0][0][1].shape)
-#        for i in range(10):  
-#          plt = x[0][0][hum]
-#          plt.savefig('feature_mapVisualization/temp{channel}.png'.format(channel = i))
+        last = nn.functional.log_softmax(last, dim=1)
 
-        #featuremapVisualization--------------to see representation highlights---------------------------- print(x[0].shape)
-        #print(x[2].shape)
-        #print(x[0][0][1].shape)
-#        for i in range(10):     # feature map visualization Jan 2022
-#          bloop = x[0][0][i].detach().cpu().numpy()
-#          plt.imsave('visualization/featuremapvis_repre/detectlayer_nomosaic/detect_1440_0_{channel}.png'.format(channel = i), bloop)
-#        print("new from the hood")
-#        print(len(x))
+#        print("LAST EXCUSE")
+#        print(last)
+#        print(last.shape)
+        
+        return last
+
+        #if UperNet inference
+#        else:
+#            pred = self.decoder(self.encoder(feed_dict['img_data'], return_feature_maps=True), segSize=segSize)
+#            return pred
+        
+        
+        
+        
+        # JEDITENDS 18th October 2021 -----------------------------UperNet------------------------------------------------------------------------------
+
+# FOR UPERNET THIS PART IS COMMENTED---------------20TH OCTOBER 2021------------------------------------------------------------------------------------          
+#        for i in range(self.nl):
+#            
+#            
+#            x[i] = self.m[i](x[i])  # conv 
+##            print("convweight second stage {}".format(i))
+##            weight = self.m[i].weight.data.cpu().numpy()
+##            print(weight[0][0])
+#            bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
+#            x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+#            print("shape haih")
+#            print(x[i].shape)
+#
+#            if not self.training:  # inference               #JEDIT 14th October 2021 ---------------------------------------this is the original btw
+#                if self.grid[i].shape[2:4] != x[i].shape[2:4]:
+#                    self.grid[i] = self._make_grid(nx, ny).to(x[i].device)
+#
+#                y = x[i].sigmoid()
+#                y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self.grid[i].to(x[i].device)) * self.stride[i]  # xy
+#
+#                y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh                
+#                z.append(y.view(bs, -1, self.no))    #-----------------------------------------------14th October 2021-------------up till here
+#
+#
+#
+#        print("WHY IS GS 32")
 #        print(x[0].shape)
 #        print(x[1].shape)
 #        print(x[2].shape)
-        for i in range(self.nl):
-            x[i] = self.m[i](x[i])  # conv
-#            print("after modulelisr")
-#            print(x[i].shape) # (2,18,20,20)
-#            print("before processing after conv module")
-#            print(x[i].shape)
-            bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
-            x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
-#            print("")
-#            print("after permuter. before adding angle") torch.Size([2, 3, 20, 20, 6]) 
-#            print(x[i].shape)
-#            print("")
-#            print("after permuter. AFTER adding angle") #torch.Size([2, 3, 20, 20, 7]) [OK] 
-#            print(x[i].shape)
-#            print("")
-
-            if not self.training:  # inference
-                if self.grid[i].shape[2:4] != x[i].shape[2:4]:
-                    self.grid[i] = self._make_grid(nx, ny).to(x[i].device)
-
-                y = x[i].sigmoid()
-#                print("y shape")
-#                print(y[..., 0:2].shape)
-                y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self.grid[i].to(x[i].device)) * self.stride[i]  # xy
-                y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
-                z.append(y.view(bs, -1, self.no))
-#        print("PRINTING PREDICTION RESULTS...............")
-##        #print(x)
-#        print(len(x)) # 3
-#        print(x[0].shape)
-#        print(x[1].shape)
-#        print(x[2].shape)
-#        # torch.Size([1, 3, 60, 80, 6])
-#        print("what's the 6 channels?")
-#        print(x[0][0][0][1])
-#        print(x[0][0][0][2])
-#        print(x[0][0][0][55])
-#        
-#        print("torchcat?")
-#        print(torch.cat(z,1).shape)
-
-        #print(len(x))
+        #return x if self.training else (torch.cat(z, 1), x) #by the way this is the original
+# COMMENT ENDS HERE ------------------------------------------20TH OCTOBER 2021-------------------------------------------------------------------------
         
-#        print("-------------------------------------------")
-#        print("")
-#        print("yolo.py x[0] shape (looking for no. of layers related to nc")
-#        print(x[0].shape)
-#        print("")
-#        print("")
-#        print("parkoured to yolo.py")
-        #print((torch.cat(z, 1), x).shape)
-#        print(len(z))
-#        print(z[0].shape)
-#        print(z[1].shape)
-#        print(z[2].shape)
-#        print(len(x))
-#        print(x[0].shape)
-#        print(x[1].shape)
-#        print(x[2].shape)
-#        print("")
-        return x if self.training else (torch.cat(z, 1), x)
 
     @staticmethod
     def _make_grid(nx=20, ny=20):
@@ -147,7 +194,7 @@ class Model(nn.Module):
     def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None):  # model, input channels, number of classes
         super(Model, self).__init__()
         if isinstance(cfg, dict):
-            self.yaml = cfg  # model dict 
+            self.yaml = cfg  # model dict
         else:  # is *.yaml
             import yaml  # for torch hub
             self.yaml_file = Path(cfg).name
@@ -168,7 +215,18 @@ class Model(nn.Module):
         if isinstance(m, Detect):
             s = 256  # 2x min stride
             m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
-            m.anchors /= m.stride.view(-1, 1, 1) 
+#            print("")
+#            print("THE OTHER STRIDE")
+#            print(m.stride)
+#            print("stride ch")
+#            print(ch)
+#            print("and this is s")
+#            print(s)
+#            print("the long equation")
+#            print(torch.tensor([x.shape for x in self.forward(torch.zeros(1,ch,s,s))]))
+#            print("how does ch change")
+#            print("")
+            m.anchors /= m.stride.view(-1, 1, 1)
             check_anchor_order(m)
             self.stride = m.stride
             self._initialize_biases()  # only run once
@@ -291,17 +349,10 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
                 pass
 
         n = max(round(n * gd), 1) if n > 1 else n  # depth gain
-        if m in [Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, DWConv, MixConv2d, Focus, DilateFocus, CrossConv, BottleneckCSP,
+        if m in [Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, DWConv, MixConv2d, Focus, CrossConv, BottleneckCSP,
                  C3]:
             c1, c2 = ch[f], args[0]
-#            print("HI")
-#            print(m)
-#            print(c1)
-#            print(c2)
-#            print(ch)
-#            #print(ch[f])
-#            print(args[0])
-#            print("--------------------")
+
             # Normal
             # if i > 0 and args[0] != no:  # channel expansion factor
             #     ex = 1.75  # exponential (default 2.0)
@@ -331,8 +382,8 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         elif m is ConcatPixel:                                                                      #Jun add ConcatPixel
             c2 = sum((int(ch[f[0]]/4), ch[f[1]]))
             #print(f[1])
-        #elif m is ConcatvWeights:                                                                                #Jun add ConcatPixel
-            #c2 = sum((int(ch[f[0]]/4), ch[f[1]]))
+        elif m is ConcatvWeights:                                                                   #Jun add ConcatvWeights
+            c2 = sum([ch[x if x < 0 else x + 1] for x in f])
         elif m is Detect:
             args.append([ch[x + 1] for x in f])
             if isinstance(args[1], int):  # number of anchors
@@ -351,6 +402,14 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         logger.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i, f, n, np, t, args))  # print
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
+        #print("LAYERS LENGTH") #------------------------------------------------------------------Jedit--------------------------------
+        #print(len(layers))
+        
+#        if i == 12:
+#          print(layers[0])
+#          print("rest")
+#          print(layers[12])
+        #------------------------------------------------------------------Jedit ENDS--------------------------------
         ch.append(c2)
     return nn.Sequential(*layers), sorted(save)
 

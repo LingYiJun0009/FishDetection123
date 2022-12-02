@@ -1,7 +1,6 @@
 import argparse
 import logging
 import sys
-import numpy as np
 from copy import deepcopy
 from pathlib import Path
 from matplotlib import pyplot as plt
@@ -36,25 +35,12 @@ class Detect(nn.Module):
         a = torch.tensor(anchors).float().view(self.nl, -1, 2)
         self.register_buffer('anchors', a)  # shape(nl,na,2)
         self.register_buffer('anchor_grid', a.clone().view(self.nl, 1, -1, 1, 1, 2))  # shape(nl,1,na,1,1,2)
-        self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv   
+        self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv  
 
     def forward(self, x):
         # x = x.copy()  # for profiling
         z = []  # inference output
-        self.training |= self.export 
-        
-#        print("")
-#        print("quick query on x shape yolo.py 23rd September 2022")
-#        print(len(x))
-#        print(x[0].shape)
-#        print(x[1].shape)  
-#        print(x[2].shape)
-#        print("")      
-        
-
-#        print("YOLO.PY SEE IF THE X MATCH WITH REGISTERED HOOK 25th September")
-#        print(x[0][0][0][0])
-
+        self.training |= self.export
         
         #featuremapVisualization---------------------------------------------------------------------------------------Jedit
 #        print(x[0].shape)
@@ -123,18 +109,6 @@ class Detect(nn.Module):
 #        print("yolo.py x[0] shape (looking for no. of layers related to nc")
 #        print(x[0].shape)
 #        print("")
-#        print("")
-#        print("parkoured to yolo.py")
-        #print((torch.cat(z, 1), x).shape)
-#        print(len(z))
-#        print(z[0].shape)
-#        print(z[1].shape)
-#        print(z[2].shape)
-#        print(len(x))
-#        print(x[0].shape)
-#        print(x[1].shape)
-#        print(x[2].shape)
-#        print("")
         return x if self.training else (torch.cat(z, 1), x)
 
     @staticmethod
@@ -147,7 +121,7 @@ class Model(nn.Module):
     def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None):  # model, input channels, number of classes
         super(Model, self).__init__()
         if isinstance(cfg, dict):
-            self.yaml = cfg  # model dict 
+            self.yaml = cfg  # model dict
         else:  # is *.yaml
             import yaml  # for torch hub
             self.yaml_file = Path(cfg).name
@@ -168,7 +142,7 @@ class Model(nn.Module):
         if isinstance(m, Detect):
             s = 256  # 2x min stride
             m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
-            m.anchors /= m.stride.view(-1, 1, 1) 
+            m.anchors /= m.stride.view(-1, 1, 1)
             check_anchor_order(m)
             self.stride = m.stride
             self._initialize_biases()  # only run once
