@@ -5,7 +5,7 @@
 # new features:
     # 1) cleared up unecessary code, clusteroutput and manager code
 
-
+#TEST BLA
 import os
 import time
 import inspect
