@@ -5,7 +5,6 @@
 # new features:
     # 1) cleared up unecessary code, clusteroutput and manager code
 
-#TEST BLA
 import os
 import time
 import inspect
@@ -16,7 +15,7 @@ from cluster_fusion.utils import *
 import math
 import cv2
 from natsort import natsorted
-
+# what if I change something
 # get the latest written test run folder
 pathtorunsdata_test = "../Data/Runs/Test/"
 latesttest = natsorted(os.listdir(pathtorunsdata_test))[-1]
