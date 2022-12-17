@@ -17,7 +17,7 @@ import cv2
 from natsort import natsorted
 # what if I change something
 # get the latest written test run folder
-# test if it did get pushed
+# test if it did get pushed attempt2
 pathtorunsdata_test = "../Data/Runs/Test/"
 latesttest = natsorted(os.listdir(pathtorunsdata_test))[-1]
 toggle = 2
