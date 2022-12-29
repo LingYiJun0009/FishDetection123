@@ -11,10 +11,13 @@ import inspect
 import shutil
 from os import path
 import numpy as np
-from cluster_fusion.utils import *
+#from cluster_fusion.utils import *
 import math
 import cv2
 from natsort import natsorted
+from hyperopt import STATUS_OK
+
+
 # what if I change something
 # get the latest written test run folder
 # test if it did get pushed attempt2
@@ -64,13 +67,11 @@ class clusterParams:
     bestMAPconf = 0.541 # this will depend on training data
 
     # todo: IOU_cutoff and conf_cutoff should be updated to read train0's future output file (have yet to be implemented)
-    IOU_cutoff = 0.002
-    conf_cutoff = 0.15
+    IOU_cutoff = 0.1
+    conf_cutoff = 0.001
 
     # output folder after clusteroutput_fusion (so it can be sent to test mAP)
     finalresult = "../Data/Runs/Test/{}/finalresult".format(latesttest)
-
-
 def a_clusteroutput(a_1, a_2, a_3, a_4, a_5, a_6, filenamepath, cloutput_nf, imgpath):
     """
     process YOLOv5_Repreoutput
@@ -280,7 +281,7 @@ def a_clusteroutput(a_1, a_2, a_3, a_4, a_5, a_6, filenamepath, cloutput_nf, img
         return a
 
     txt_list = []
-    # txt_list = ["gt_112_frame(491).txt"]
+    # txt_list = ["gt_220_frame(133).txt"]
     for file in os.listdir(filenamepath):
         if file.endswith(".txt"):
             txt_list.append(file)
@@ -572,7 +573,6 @@ def a_clusteroutput(a_1, a_2, a_3, a_4, a_5, a_6, filenamepath, cloutput_nf, img
                 #     break
 
                 #  seen should be somewhere where the whole clustindices will be deposited there or we don't even need that, just query listoclusters
-
 def automatictroubleshoot(bestMAPconf, cf_0001_path_folder, cloutput_nf, gtpath, imgpath, IOU_cutoff, conf_cutoff):
     """
     process output from a_clusteroutput and fuse it with low_conf YOLORGB output
@@ -641,7 +641,8 @@ def automatictroubleshoot(bestMAPconf, cf_0001_path_folder, cloutput_nf, gtpath,
     fiveFeaturesnpy_TP = np.empty((1, 5))
 
     txt_list = []
-    # txt_list = ["gt_217_frame(259).txt"]
+    # txt_list = ["gt_292_frame(24).txt", "gt_270_frame(43).txt", "gt_276_frame(110).txt", "gt_223_frame(107).txt",
+    #             "gt_263_frame(59).txt", "gt_269_frame(40).txt"]
     for file in os.listdir(cf_0001_path_folder):
         if file.endswith(".txt"):
             txt_list.append(file)
@@ -695,25 +696,7 @@ def automatictroubleshoot(bestMAPconf, cf_0001_path_folder, cloutput_nf, gtpath,
             cl_output_lines = cl_file.readlines()
             if len(cl_output_lines) == 0:
                 print("no cl lines in " + filename)
-                ''' '''
-                # 1st October: code block related to FN no. 2
-                # increment gtFNcount since there's no cl
 
-                filtered_cf0001_ind_inv = np.where(conf_cf0001.ravel() > bestMAPconf)[
-                    0]  # index in relation to original cf lines
-                filteredcount += len(filtered_cf0001_ind_inv)
-                filt_boxmat_cf0001_inv = boxmat_cf0001[filtered_cf0001_ind_inv]
-                tempmat = def_ioumat(filt_boxmat_cf0001_inv, boxmat_gt)
-                if len(filt_boxmat_cf0001_inv) != 0:
-                    maxcfIOU = np.max(tempmat, axis=0)
-                    indwhere = np.where(maxcfIOU > 0.5)[0]  # which index of gt overlaps with high_cf > 0.5
-                    indwhere_inv = np.where(maxcfIOU < 0.5)[0]
-                    gtFNcount += (len(gt_lines) - len(indwhere))  # len(indwhere) current TP for this frame
-                    FNsofardict[filename] = boxmat_gt[indwhere_inv]
-                if len(filt_boxmat_cf0001_inv) == 0:
-                    gtFNcount += len(gt_lines)
-                    FNsofardict[filename] = boxmat_gt
-                ''' '''
                 continue
             # process cl_output_lines
             thearray_cl = pro2nparr(cl_output_lines)
@@ -727,385 +710,304 @@ def automatictroubleshoot(bestMAPconf, cf_0001_path_folder, cloutput_nf, gtpath,
                 0]  # index in relation to original cf lines
             filtered_cf0001_ind_inv = np.where(conf_cf0001.ravel() > bestMAPconf)[
                 0]  # index in relation to original cf lines
+
+            # if there is no low cf then below code is not needed
+            if len(filtered_cf0001_ind) == 0:
+                print("no low cf lines")
+                continue
+
             filteredcount += len(filtered_cf0001_ind_inv)
             filt_boxmat_cf0001 = boxmat_cf0001[filtered_cf0001_ind]  # boxmat where conf < bestMAPconf
             filt_boxmat_cf0001_inv = boxmat_cf0001[filtered_cf0001_ind_inv]  # boxmat where conf > bestMAPconf
 
-            # get indices of filtered cf_0001 (lowcf) that overlaps with gt > IOU 0.5
-            IOUmat_cfgt = def_ioumat(filt_boxmat_cf0001, boxmat_gt)
-            if toggle == 0 or toggle == 1:
-                print("lenghts of gt, filtcf0001, cloutput")
-                print("len of gt: " + str(len(boxmat_gt)))
-                print("len of filt cf 0001: " + str(len(filt_boxmat_cf0001)))
-                print("len of filt cf 0001 inv: " + str(len(filt_boxmat_cf0001_inv)))
-                print("len of cloutput: " + str(len(boxmat_cl)))
-                print("IOUmat_cfgt " + filename)
-                print(IOUmat_cfgt)
-            maxrowIOU_gtcf = np.max(IOUmat_cfgt, axis=1)
-            cfind_IOU05 = np.where(maxrowIOU_gtcf > 0.5)[0]
 
-            '''getting FP [11th September]
-            # get indices of filtered cf_0001 (lowcf) where it overlaps with gt < IOU0.5 
-            '''
-            cfind_IOU05_inv = np.where(maxrowIOU_gtcf < 0.5)[0]
-            ''''''
 
-            # 3rd September 2022 18:02: cancel [low cf that has IOU with gt > 0.5]
-            # that has big ish overlap with high cf
-            # REMINDER:
-            # filt_boxmat_cf0001[cfind_IOU05] = cf0001 < bestMAPconf that overlaps with gt > IOU 0.5
-            # filt_boxmat_cf0001_inv = cf > bestMAPconf
-            IOUmat_cfhicflo = def_ioumat(filt_boxmat_cf0001[cfind_IOU05],
-                                         filt_boxmat_cf0001_inv)  # overlap between cf high and cf low
-
-            # to solve np.max identity problem around ln 254
-            if len(filt_boxmat_cf0001[cfind_IOU05]) == 0:
-                IOUmat_cfhicflo = np.empty((0, 1))
-            elif len(filt_boxmat_cf0001_inv) == 0:
-                IOUmat_cfhicflo = np.zeros((len(filt_boxmat_cf0001[cfind_IOU05]), 1))
-
-            if toggle == 0 or toggle == 1:
-                print("cf high cf low")
-                print("filt_boxmat_cf0001_inv: " + str(len(filt_boxmat_cf0001_inv)))
-                print("filt_boxmat_cf0001[cfind_IOU05]: " + str(len(filt_boxmat_cf0001[cfind_IOU05])))
-                print(IOUmat_cfhicflo)
-
-            # this index of (low cf that overlaps with gt > IOU 0.5 [filt_boxmat_cf0001[cfind_IOU05]) that does not overlaps with a high cf
-            overlaphi_low_ind = np.where(np.max(IOUmat_cfhicflo, axis=1) == 0)[0]
-
-            if toggle == 0 or toggle == 1:
-                print("overlaphilow")
-                print(overlaphi_low_ind)
-
-            # later on all related cfindIOU05 needs to be edited
-            # overlap of cl with [cf that overlaps > 0.5 with gt that does not overlap with high cond cf]
-            IOUmat_cfcl = def_ioumat(filt_boxmat_cf0001[cfind_IOU05][overlaphi_low_ind], boxmat_cl)
-
-            maxrowIOU_cfcl = np.max(IOUmat_cfcl, axis=1)
-            cfclind_IOU01 = np.where(maxrowIOU_cfcl > 0.1)[
-                0]  # for each cf that has overlap IOU > 0.1 with cl is considered
-            clind_IOUmaxn01 = np.argmax(IOUmat_cfcl, axis=1)[
-                cfclind_IOU01]  # cl index that has overlap IOU > 0.1 with cf
-            cfcl_IOU_array = maxrowIOU_cfcl[cfclind_IOU01]
-
-            '''getting FP [11th September]
-            # cancel [low cf that has IOU with gt > 0.5] that has big ish overlap with high cf
-            '''
-            IOUmat_cfhicflo_v2 = def_ioumat(filt_boxmat_cf0001[cfind_IOU05_inv], filt_boxmat_cf0001_inv)
-
-            # to solve np.max identity problem
-            if len(filt_boxmat_cf0001[cfind_IOU05_inv]) == 0:
-                IOUmat_cfhicflo_v2 = np.empty((0, 1))
-            elif len(filt_boxmat_cf0001_inv) == 0:
-                IOUmat_cfhicflo_v2 = np.zeros((len(filt_boxmat_cf0001[cfind_IOU05_inv]), 1))
-
-            # this index of (low cf that overlaps with gt < IOU 0.5 [filt_boxmat_cf0001[cfind_IOU05_inv]) that does not overlaps with a high cf
-            overlaphi_low_ind_v2 = np.where(np.max(IOUmat_cfhicflo_v2, axis=1) == 0)[0]
-
-            # overlap of cl with [cf that overlaps < 0.5 with gt that does not overlap with high cond cf]
-            IOUmat_cfcl_FP = def_ioumat(filt_boxmat_cf0001[cfind_IOU05_inv][overlaphi_low_ind_v2], boxmat_cl)
-            maxrowIOU_cfcl_FP = np.max(IOUmat_cfcl_FP, axis=1)
-            cfclind_IOU01_FP = np.where(maxrowIOU_cfcl_FP > 0.1)[
-                0]  # for each cf_FP that has overlap IOU > 0.1 with cl is considered
-            clind_IOUmaxn01_FP = np.argmax(IOUmat_cfcl_FP, axis=1)[
-                cfclind_IOU01_FP]  # cl index that has overlap IOU > 0.1 with cf
-            cfcl_IOU_array_FP = maxrowIOU_cfcl_FP[cfclind_IOU01_FP]
-            ''''''                          ''''''
-
-            # parameters to take note:
-            # nested indices in regards to original cf lines
-            # boxmat_cf0001[filtered_cf0001_ind][cfind_IOU05][overlaphi_low_ind][cfclind_IOU01]
-            cf0001ind_towardori = filtered_cf0001_ind[cfind_IOU05][overlaphi_low_ind][cfclind_IOU01]
-
-            '''getting FP [11th September] nested indices in regards to original cf lines (but this time
-            it's for low cf that DOES NOT overlap with gt)'''
-            cf0001ind_towardori_FP = filtered_cf0001_ind[cfind_IOU05_inv][overlaphi_low_ind_v2][cfclind_IOU01_FP]
-            '''         '''         '''         '''
-
-            # remove low cf that share the same cl, higher conf is chosen 5th September------
-            if len(clind_IOUmaxn01) != 0:
-
-                toremoveind, newcl = remove_duplicl(clind_IOUmaxn01, conf_cf0001[cf0001ind_towardori])
-                if len(toremoveind) > 0:
-                    clind_IOUmaxn01 = newcl
-                    cf0001ind_towardori = np.delete(cf0001ind_towardori, toremoveind)
-                    cfcl_IOU_array = np.delete(cfcl_IOU_array, toremoveind)
-
-            '''getting the same variables but FP version [11th September]'''
-            if len(clind_IOUmaxn01_FP) != 0:
-                toremoveind_FP, newcl_FP = remove_duplicl(clind_IOUmaxn01_FP, conf_cf0001[cf0001ind_towardori_FP])
-                if len(toremoveind_FP) > 0:
-                    clind_IOUmaxn01_FP = newcl_FP
-                    cf0001ind_towardori_FP = np.delete(cf0001ind_towardori_FP, toremoveind_FP)
-                    cfcl_IOU_array_FP = np.delete(cfcl_IOU_array_FP, toremoveind_FP)
-            '''         '''         '''         '''
-            # --------------------------------UPDATED-----------------------------------------------
-
-            # ----------------------------UPDATE 11TH OCTOBER 2022 ON ELIMINATING FP AND TP OVERLAP AND CHOOSING THE ONE WITH HIGHER CONF-----
-            # find IOU_mat that overlaps between FP and TP
-            # make sure both of them are not empty to make sure no mat error will occur
-            # also if one of them is empty no overlap will occur anyways
-            if len(cf0001ind_towardori_FP) != 0 and len(cf0001ind_towardori) != 0:
-                FP_TP_IOU_mat = def_ioumat(boxmat_cf0001[cf0001ind_towardori_FP], boxmat_cf0001[cf0001ind_towardori])
-                index_arr = np.where(FP_TP_IOU_mat > 0.1)  # arbitrary overlap IOU parameter (0.1 for now)
-                rmvTPind = []
-                rmvFPind = []
-                if len(index_arr[0]) != 0 and len(index_arr[1]) != 0:
-                    for ftind in range(len(index_arr[0])):
-                        rmvFPorTP = np.argmin((conf_cf0001[cf0001ind_towardori_FP][index_arr[0][ftind]],
-                                               conf_cf0001[cf0001ind_towardori][index_arr[1][ftind]]))
-                        if rmvFPorTP == 0:
-                            rmvFPind.append(index_arr[0][ftind])
-                        if rmvFPorTP == 1:
-                            rmvTPind.append(index_arr[1][ftind])
-                if len(rmvTPind) > 0:
-                    # convert to np array so I can use np unique
-                    rmvTPind = np.unique(np.array(rmvTPind))
-                    # then remove from the list, IOU array, conf and box _TP
-                    clind_IOUmaxn01 = np.delete(clind_IOUmaxn01, rmvTPind)
-                    cf0001ind_towardori = np.delete(cf0001ind_towardori, rmvTPind)
-                    cfcl_IOU_array = np.delete(cfcl_IOU_array, rmvTPind)
-
-                if len(rmvFPind) > 0:
-                    # convert to np array so I can use np unique
-                    rmvFPind = np.unique(np.array(rmvFPind))
-                    # then remove from the list, IOU array, conf and box _TP
-                    clind_IOUmaxn01_FP = np.delete(clind_IOUmaxn01_FP, rmvFPind)
-                    cf0001ind_towardori_FP = np.delete(cf0001ind_towardori_FP, rmvFPind)
-                    cfcl_IOU_array_FP = np.delete(cfcl_IOU_array_FP, rmvFPind)
-
-            # ----------------------------11TH OCTOBER UPDATE END ----------------------------------------------------------------------------
-
-            ''''''         '''         '''
-            # 1st October 2022
-            # code block responsible for False Negative (FN) no.3
-            # list/array of conf0001 (high and low) boxes that is considered as detection AND also overlaps with gt > 0.5
-            selectedcf = np.concatenate((boxmat_cf0001[filtered_cf0001_ind_inv], boxmat_cf0001[cf0001ind_towardori]),
-                                        axis=0)
-            gt_mat = def_ioumat(boxmat_gt, selectedcf)  # try to find array of gt that has not got an overlap
-            # ind = np.where(np.max(randarray, axis = 1) < 0.5)
-            # index of gt that DOES NOT overlap with any detection (low or high cf)
-            if len(selectedcf) == 0:
-                gtFNcount += len(boxmat_gt)
-                FNsofardict[filename] = boxmat_gt
-                print("")
-                print("FN test scf==0-------------")
-                print(len(boxmat_gt))
-            if len(selectedcf) > 0:
-                gtFNind = np.where(np.max(gt_mat, axis=1) < 0.5)
-                gtFNcount += len(gtFNind[0])  # increment FN count
-                FNsofardict[filename] = boxmat_gt[gtFNind]  # record down filename gt array pairs
-                print("")
-                print("FN test---scf>=0----------")
-                print(len(gtFNind[0]))
-            ''''''         '''          '''
-
-            if toggle == 0 or toggle == 1:
-                print("clind_IOUmaxn01" + str(clind_IOUmaxn01))  # which cl index
-                print("cfclind_IOU01" + str(cfclind_IOU01))  # which cf index
-                print("cfcl_IOU_array" + str(cfcl_IOU_array))  # its value
-
-            # block in charge of TP details output
-            if toggle == 2 or toggle == 0:
-                if len(cfcl_IOU_array) == 0:
-                    print("no extra TP for " + str(filename))
-                else:
-                    IOUsofar = np.concatenate((IOUsofar, cfcl_IOU_array), axis=None)
-                    confsofar = np.concatenate((confsofar, conf_cf0001[cf0001ind_towardori]), axis=None)
-
-                    print(
-                        bcolors.OKCYAN + "STATS for TP:-------------------------------------------------- " + filename + bcolors.ENDC)
-                    print(bcolors.BOLD + "Individual ROI stats:" + bcolors.ENDC)
-                    print("  frame index from cf0001: " + str(
-                        np.delete(filtered_cf0001_ind[cfind_IOU05][overlaphi_low_ind][cfclind_IOU01], toremoveind)))
-                    print("  IOU array :" + str(cfcl_IOU_array))
-                    print("  conf: " + str(conf_cf0001[cf0001ind_towardori]))
-                    print("")
-                    print(bcolors.BOLD + "Per frame stats: " + bcolors.ENDC)
-                    print("  total no of potential extra TP for this frame: " + str(len(cfcl_IOU_array)))
-                    print("  IOU range: min[" + str(np.min(cfcl_IOU_array)) + "] max[" + str(
-                        np.max(cfcl_IOU_array)) + "]")
-                    print("  IOU average : " + str(np.mean(cfcl_IOU_array)))
-                    print("  conf range: min[" + str(np.min(conf_cf0001[cf0001ind_towardori])) + "] max[" + str(
-                        np.max(conf_cf0001[cf0001ind_towardori])) + "]")
-                    print("  conf average: " + str(np.mean(conf_cf0001[cf0001ind_towardori])))
-                    print(" ")
-                    print(bcolors.BOLD + "Total stats so far: " + bcolors.ENDC)
-                    print("  total no of potential extra TP so far: " + str(len(confsofar)))
-                    print("  double check: " + str(len(IOUsofar)))
-                    print("  IOU range so far: min[" + str(np.min(IOUsofar)) + "] max[" + str(np.max(IOUsofar)) + "]")
-                    print("  IOU average so far: " + str(np.mean(IOUsofar)))
-                    print(
-                        "  conf range so far: min[" + str(np.min(confsofar)) + "] max[" + str(np.max(confsofar)) + "]")
-                    print("  conf average so far: " + str(np.mean(confsofar)))
-                    print(" ")
-                    print("no. of total gt annotations: " + str(gtcount))  # number of groundtruth annotations
-                    print("no. of total detected high cf: " + str(filteredcount))  # number of detected high conf cf
-                    print(bcolors.WARNING + "just remember IOU means the IOU between cf and cl" + bcolors.ENDC)
-                    print(bcolors.OKCYAN + "-------------------------------------------------- " + bcolors.ENDC)
-                    print(" ")
-
-            # block in charge of FP details output
-            if toggle == 2 or toggle == 0:
-                if len(cfcl_IOU_array_FP) == 0:
-                    print("no extra FP for" + str(filename))
-
-                else:
-                    IOUsofar_FP = np.concatenate((IOUsofar_FP, cfcl_IOU_array_FP), axis=None)
-                    confsofar_FP = np.concatenate((confsofar_FP, conf_cf0001[cf0001ind_towardori_FP]), axis=None)
-                    print(
-                        bcolors.MEHGREEN + "STATS for FP:-------------------------------------------------- " + filename + bcolors.ENDC)
-                    print(bcolors.BOLD + "Individual ROI stats:" + bcolors.ENDC)
-                    print("  frame index from cf0001: " + str(
-                        np.delete(filtered_cf0001_ind[cfind_IOU05_inv][overlaphi_low_ind_v2][cfclind_IOU01_FP],
-                                  toremoveind_FP)))
-                    print("  IOU array :" + str(cfcl_IOU_array_FP))
-                    print("  conf: " + str(conf_cf0001[cf0001ind_towardori_FP]))
-                    print("")
-                    print(bcolors.BOLD + "Per frame stats: " + bcolors.ENDC)
-                    print("  total no of potential extra FP for this frame: " + str(len(cfcl_IOU_array_FP)))
-                    print("  IOU range: min[" + str(np.min(cfcl_IOU_array_FP)) + "] max[" + str(
-                        np.max(cfcl_IOU_array_FP)) + "]")
-                    print("  IOU average : " + str(np.mean(cfcl_IOU_array_FP)))
-                    print("  conf range: min[" + str(np.min(conf_cf0001[cf0001ind_towardori_FP])) + "] max[" + str(
-                        np.max(conf_cf0001[cf0001ind_towardori_FP])) + "]")
-                    print("  conf average: " + str(np.mean(conf_cf0001[cf0001ind_towardori_FP])))
-                    print(" ")
-                    print(bcolors.BOLD + "Total stats so far: " + bcolors.ENDC)
-                    print("  total no of potential extra FP so far: " + str(len(confsofar_FP)))
-                    print("  double check: " + str(len(IOUsofar_FP)))
-                    print("  IOU range so far: min[" + str(np.min(IOUsofar_FP)) + "] max[" + str(
-                        np.max(IOUsofar_FP)) + "]")
-                    print("  IOU average so far: " + str(np.mean(IOUsofar_FP)))
-                    print("  conf range so far: min[" + str(np.min(confsofar_FP)) + "] max[" + str(
-                        np.max(confsofar_FP)) + "]")
-                    print("  conf average so far: " + str(np.mean(confsofar_FP)))
-                    print(" ")
-                    print("no. of total gt annotations: " + str(gtcount))  # number of groundtruth annotations
-                    print("no. of total detected high cf: " + str(filteredcount))  # number of detected high conf cf
-                    print(bcolors.WARNING + "just remember IOU means the IOU between cf and cl" + bcolors.ENDC)
-                    print(bcolors.OKCYAN + "-------------------------------------------------- " + bcolors.ENDC)
-                    print(" ")
-
-            # VISUAL AID SO i DON'T GET CONFUSED AWFHCAWUEHAOUEHAWUIHC@&$&%@(*#&(@*$&&^@$*(#@*&$^@&*(!@#*$&^@@!*(#*$&^@*(!
-            # cl ind, IOU array, index left towards original cf
-            # clind_IOUmaxn01, cfcl_IOU_array(the amount of overlap, follow clindIOUmax01 so don't worry), cf0001ind_towardori
-            img = cv2.imread(os.path.join(imgpath, filename[:-4] + ".jpg"))
-            img2 = drawstuff_forgt(gtpath, filename, imgpath, (0, 0, 255))
-            img3 = drawstuff_forcf(cf_0001_path_folder, cf0001ind_towardori, cfcl_IOU_array, filename, img2,
-                                   (255, 0, 0))
-            img4 = drawstuff_forcl(cloutput_nf, clind_IOUmaxn01, filename, img3, (0, 155, 0))
-            # neon blue for cf that represents FP
-            img5 = drawstuff_forcf(cf_0001_path_folder, cf0001ind_towardori_FP, cfcl_IOU_array_FP, filename, img4,
-                                   (226, 249, 17))
-            # neon green for cl that represents cl that "supported" FP_cfs
-            img6 = drawstuff_forcl(cloutput_nf, clind_IOUmaxn01_FP, filename, img5, (49, 247, 14))
-
-            # cv2.imwrite(os.path.join(outputfolder30, filename[:-4] + ".jpg"), img6)
-            # cv2.imshow("hello", img4)
-            # cv2.imshow("hello", img6)
-            # cv2.waitKey()
-
-            # 22nd November 2022
-            # make 5 features
-            # for FP
-            if len(cfcl_IOU_array_FP) != 0:
-                five_features_FP = make_5features(cfcl_IOU_array_FP, conf_cf0001, cf0001ind_towardori_FP,
-                                                  thearray_cf0001)
-            if len(
-                    cfcl_IOU_array_FP) == 0:  # make an empty array, later code write condition so it won't append empty array
-                five_features_FP = np.array([])
-
-            # for TP
-            if len(cfcl_IOU_array) != 0:
-                five_features_TP = make_5features(cfcl_IOU_array, conf_cf0001, cf0001ind_towardori, thearray_cf0001)
-            if len(
-                    cfcl_IOU_array) == 0:  # make an empty array, later code write condition so it won't append empty array
-                five_features_TP = np.array([])
-
-            # 22nd Nov 2022 [appending it]
-            if len(five_features_FP) != 0:
-                fiveFeaturesnpy_FP = np.concatenate((fiveFeaturesnpy_FP, five_features_FP), axis=0)
-            if len(five_features_TP) != 0:
-                print("what is going on")
-                print(fiveFeaturesnpy_TP)
-                fiveFeaturesnpy_TP = np.concatenate((fiveFeaturesnpy_TP, five_features_TP), axis=0)
-
-            # # 21st Nov 2022 edit out array to loop to filtered array
-            # # # recursively write FP ROI to FP_ROI_folder
-            # FP_u, TP_u = get_unique(cfcl_IOU_array_FP, conf_cf0001[cf0001ind_towardori_FP],
-            #                         cfcl_IOU_array, conf_cf0001[cf0001ind_towardori], within = True,
-            #                         cf0001ind_towardori = cf0001ind_towardori, cf0001ind_towardori_FP = cf0001ind_towardori_FP)
-            # if len(FP_u) != 0:
-            #     for FP_ind, FP_box in enumerate(boxmat_cf0001[FP_u]):
-            #         # transform to int
-            #         # 21st Nov check width and height of current FP ROI see if it falls in the category
-            #         FP_w = thearray_cf0001[FP_u[FP_ind]][2]
-            #         FP_h = thearray_cf0001[FP_u[FP_ind]][3]
-            #         if FP_w < 0.3 and FP_h < 0.3:
-            #             xyxy = [int(x) for x in FP_box]
-            #             x1, y1, x2, y2 = xyxy
-            #             cv2.imwrite(os.path.join(FP_ROI_folder_21stNov, filename[:-4] + "_{}".format(FP_ind) + ".jpg"),
-            #                         img[y1:y2, x1:x2, :])
-            #             afterfilterFP += 1
+            # todo: [17th Dec 2022] # commented 749 -> 949 [DONE 20TH DEC 2022]
+            #  cancel low cf that has big-ish overlap with high cf in general
+            #  AKA: get low cf that does not overlap with high cf (np.where(np.max(IOUmat == 0)))
+            #  (# this index of (low cf that overlaps with gt > IOU 0.5 [filt_boxmat_cf0001[cfind_IOU05]) that does not overlaps with a high cf
+            #             overlaphi_low_ind = np.where(np.max(IOUmat_cfhicflo, axis=1) == 0)[0])
             #
-            # # # recursively write TP ROI to TP_ROI_folder
-            # if len(TP_u) != 0:
-            #     for TP_ind, TP_box in enumerate(boxmat_cf0001[TP_u]):
-            #         # transform to int
-            #         # 21st Nov check width and height of current TP ROI see if it falls in the category
-            #         TP_w = thearray_cf0001[TP_u[TP_ind]][2]
-            #         TP_h = thearray_cf0001[TP_u[TP_ind]][3]
-            #         if TP_w < 0.3 and TP_h < 0.3:
-            #             xyxy = [int(x) for x in TP_box]
-            #             x1, y1, x2, y2 = xyxy
-            #             cv2.imwrite(os.path.join(TP_ROI_folder_21stNov, filename[:-4] + "_{}".format(TP_ind) + ".jpg"),
-            #                         img[y1:y2, x1:x2, :])
-            #             afterfilterTP += 1
+            # 18th Dec 2022 # bloopy1
+            print(" ")
+            print(bcolors.OKCYAN)
+            print("troubleshoot for the dumb")
+            print("high_cf len: " + str(len(filt_boxmat_cf0001_inv)))
+            print("low_cf len: " + str(len(filt_boxmat_cf0001)))
+            print(bcolors.ENDC)
+            print(" ")
+            lohicf_iou = def_ioumat(filt_boxmat_cf0001_inv, filt_boxmat_cf0001)
+            print(lohicf_iou)
+            # (var locfxiouhi) index of low cf without any overlap with highcf
+            # to solve np.max problem
+            if len(filt_boxmat_cf0001_inv) == 0: # if there is no high cf, assign ALL low cf to locfxiouhi
+                locfxiouhi = filtered_cf0001_ind # index in relation to original cf line
+            if len(filt_boxmat_cf0001_inv) != 0:
+                locfxiouhi = filtered_cf0001_ind[np.where(np.max(lohicf_iou, axis=0) == 0)[0]] # index in relation to original cf line
 
-    # save five features as an npy file [22nd November 2022]
-    # np.save("five_features_FP_train.npy", fiveFeaturesnpy_FP[1:])
-    # np.save("five_features_TP_train.npy", fiveFeaturesnpy_TP[1:])
 
-    print(bcolors.WARNING + "no. of total gt annotations: " + str(gtcount))  # number of groundtruth annotations
-    print("no. of total detected high cf: " + str(filteredcount) + bcolors.ENDC)  # number of detected high conf cf
-    print(bcolors.BOLD + "Total stats so far for FP: " + bcolors.ENDC)
-    print("  total no of potential extra FP so far: " + str(len(confsofar_FP)))
-    print("  double check: " + str(len(IOUsofar_FP)))
-    print("  IOU range so far: min[" + str(np.min(IOUsofar_FP)) + "] max[" + str(np.max(IOUsofar_FP)) + "]")
-    print("  IOU average so far: " + str(np.mean(IOUsofar_FP)))
-    print("  conf range so far: min[" + str(np.min(confsofar_FP)) + "] max[" + str(np.max(confsofar_FP)) + "]")
-    print("  conf average so far: " + str(np.mean(confsofar_FP)))
-    print(" ")
-    print(bcolors.BOLD + "Total stats so far for TP: " + bcolors.ENDC)
-    print("  total no of potential extra TP so far: " + str(len(confsofar)))
-    print("  double check: " + str(len(IOUsofar)))
-    print("  IOU range so far: min[" + str(np.min(IOUsofar)) + "] max[" + str(np.max(IOUsofar)) + "]")
+            #  TODO: [17th Dec 2022] [DONE] [20TH DEC 2022]
+            #   GET IOU overlap between (cl) and (low cf that does not overlap with high cf) at least 0.1 IOU >= 0.1
+            #   remove low cf that share the same cl, higher conf is chosen() == support_box_v1
+            #   there are cases where multiple cl share the same cf, just ignore it, np.unique low cf that's it
 
-    print("")
-    print("  IOU average so far: " + str(np.mean(IOUsofar)))
-    print("  conf range so far: min[" + str(np.min(confsofar)) + "] max[" + str(np.max(confsofar)) + "]")
-    print("  conf average so far: " + str(np.mean(confsofar)))
-    print(bcolors.BOLD + "Total stats so far for FN: " + bcolors.ENDC)
-    print("  total no of FN: " + str(gtFNcount))
-    print(" ")
-    print(" ")
-    print(" ")
-    print(print(bcolors.WARNING + "remember variable FNsofardict, dictionary that has filename and"
-                                  "FN boxmat gt pairs " + bcolors.ENDC))  # number of groundtruth annotations)
+            locfcl_iouMat = def_ioumat(boxmat_cf0001[locfxiouhi], boxmat_cl) # iou betewen cl box and [locf boxes that doesn't overlap with hicf]
 
-    print(" ")
-    print("after filtered FPTP:")
-    FP_unique, TP_unique = get_unique(IOUsofar_FP, confsofar_FP, IOUsofar, confsofar, within=False)
-    print("FP_unique length: " + str(len(FP_unique)))
-    print("TP_unique length: " + str(len(TP_unique)))
-    print("")
-    print(bcolors.MEHGREEN + "after filter FP: " + str(afterfilterFP))
-    print("after filter TP: " + str(afterfilterTP))
+            print("locfcl_iouMat")
+            print(locfcl_iouMat)
+            # print("which cl from iouMat is more than 0.1")
+            # print(locfcl_iouMat_cl01)
 
-    print("")
-    print("end of automatictroubleshoot repre")
+            # now need to get the ind of locf that overlaps with cl > 0.1, len() should be line of cf with iou > 0.1
+            ioumat01 = np.where(locfcl_iouMat > IOU_cutoff) # which 2d index has > 0.1
+            locfind = []
+            for clind in np.unique(ioumat01[1]):
+                h = locfxiouhi[ioumat01[0][np.where(ioumat01[1] == clind)[0]]]
+                print("h")
+                print(h)
+                if len(h) > 1:
+                    locfind.append(h[np.argmax(conf_cf0001[h])])
 
+                if len(h) == 1:
+                    print(filename)
+                    locfind.append(h[0])
+
+            fin_lowcf = np.unique(np.array(locfind))  # low cf ind in relation to original cf0001
+
+
+            print("")
+            print("no. of gt: " + str(len(boxmat_gt)))
+            print("no. of cf0001: " + str(len(cf_0001_lines)))
+            print("no. of extra boxes: " + str(len(fin_lowcf)))
+            print("POTENTIAL TPFP stats") # FP should decrease and TP should stay the same
+            if len(fin_lowcf) == 0:
+                print("NOTHING EXTRA COMING OUT OF HERE")
+                continue
+            if len(fin_lowcf) != 0:
+                fin_lowcf_confcutoff = fin_lowcf[
+                    np.where(conf_cf0001[fin_lowcf] > conf_cutoff)[0]]  # final lo cf ind in relation to orifinal cf0001
+                if len(fin_lowcf_confcutoff) == 0:
+                    print("NO CONF HIGHER THAN SET CONF NOTHING EXTRA COMING OUT!")
+                    continue
+                if len(fin_lowcf_confcutoff) !=0:
+                    print(boxmat_gt)
+                    print(boxmat_cf0001[fin_lowcf_confcutoff])
+                    gtxtracf_iou = np.max(def_ioumat(boxmat_gt, boxmat_cf0001[fin_lowcf_confcutoff]),
+                                          axis=0)  # gt and extra inference iou mat
+                    afterfilterTP += len(np.where(gtxtracf_iou > 0.5)[0])
+                    afterfilterFP += len(np.where(gtxtracf_iou < 0.5)[0])
+
+
+
+
+                    # 22nd Dec 2022
+                    # oh yea sure clusterparam class is there... but I have so many parameters to write
+                    # maybe... maybe... I'll try the 2 IOU loss first and see if it works
+
+            print("afterfilter TP: " + str(afterfilterTP)) # extra TP returned
+            print("afterfilter FP: " + str(afterfilterFP))
+            print("")
+            print("")
+
+    return afterfilterTP, afterfilterFP
+            # todo: [17th Dec 2022] [omitted]
+            #  Eliminating overlap (IOU > 0.1) between support_box_v1s by choosing the one with higher confidence()
+
+
+    #         # block in 17th Dec 2022 in charge of processing final TPFP combines output (trying not to be dependant on gt)
+    #         # block in charge of TP details output
+    #         if toggle == 2 or toggle == 0:
+    #             if len(cfcl_IOU_array) == 0:
+    #                 print("no extra TP for " + str(filename))
+    #             else:
+    #                 IOUsofar = np.concatenate((IOUsofar, cfcl_IOU_array), axis=None)
+    #                 confsofar = np.concatenate((confsofar, conf_cf0001[cf0001ind_towardori]), axis=None)
+    #
+    #                 print(
+    #                     bcolors.OKCYAN + "STATS for TP:-------------------------------------------------- " + filename + bcolors.ENDC)
+    #                 print(bcolors.BOLD + "Individual ROI stats:" + bcolors.ENDC)
+    #                 print("  frame index from cf0001: " + str(
+    #                     np.delete(filtered_cf0001_ind[cfind_IOU05][overlaphi_low_ind][cfclind_IOU01], toremoveind)))
+    #                 print("  IOU array :" + str(cfcl_IOU_array))
+    #                 print("  conf: " + str(conf_cf0001[cf0001ind_towardori]))
+    #                 print("")
+    #                 print(bcolors.BOLD + "Per frame stats: " + bcolors.ENDC)
+    #                 print("  total no of potential extra TP for this frame: " + str(len(cfcl_IOU_array)))
+    #                 print("  IOU range: min[" + str(np.min(cfcl_IOU_array)) + "] max[" + str(
+    #                     np.max(cfcl_IOU_array)) + "]")
+    #                 print("  IOU average : " + str(np.mean(cfcl_IOU_array)))
+    #                 print("  conf range: min[" + str(np.min(conf_cf0001[cf0001ind_towardori])) + "] max[" + str(
+    #                     np.max(conf_cf0001[cf0001ind_towardori])) + "]")
+    #                 print("  conf average: " + str(np.mean(conf_cf0001[cf0001ind_towardori])))
+    #                 print(" ")
+    #                 print(bcolors.BOLD + "Total stats so far: " + bcolors.ENDC)
+    #                 print("  total no of potential extra TP so far: " + str(len(confsofar)))
+    #                 print("  double check: " + str(len(IOUsofar)))
+    #                 print("  IOU range so far: min[" + str(np.min(IOUsofar)) + "] max[" + str(np.max(IOUsofar)) + "]")
+    #                 print("  IOU average so far: " + str(np.mean(IOUsofar)))
+    #                 print(
+    #                     "  conf range so far: min[" + str(np.min(confsofar)) + "] max[" + str(np.max(confsofar)) + "]")
+    #                 print("  conf average so far: " + str(np.mean(confsofar)))
+    #                 print(" ")
+    #                 print("no. of total gt annotations: " + str(gtcount))  # number of groundtruth annotations
+    #                 print("no. of total detected high cf: " + str(filteredcount))  # number of detected high conf cf
+    #                 print(bcolors.WARNING + "just remember IOU means the IOU between cf and cl" + bcolors.ENDC)
+    #                 print(bcolors.OKCYAN + "-------------------------------------------------- " + bcolors.ENDC)
+    #                 print(" ")
+    #
+    #         # block in charge of FP details output
+    #         if toggle == 2 or toggle == 0:
+    #             if len(cfcl_IOU_array_FP) == 0:
+    #                 print("no extra FP for" + str(filename))
+    #
+    #             else:
+    #                 IOUsofar_FP = np.concatenate((IOUsofar_FP, cfcl_IOU_array_FP), axis=None)
+    #                 confsofar_FP = np.concatenate((confsofar_FP, conf_cf0001[cf0001ind_towardori_FP]), axis=None)
+    #                 print(
+    #                     bcolors.MEHGREEN + "STATS for FP:-------------------------------------------------- " + filename + bcolors.ENDC)
+    #                 print(bcolors.BOLD + "Individual ROI stats:" + bcolors.ENDC)
+    #                 print("  frame index from cf0001: " + str(
+    #                     np.delete(filtered_cf0001_ind[cfind_IOU05_inv][overlaphi_low_ind_v2][cfclind_IOU01_FP],
+    #                               toremoveind_FP)))
+    #                 print("  IOU array :" + str(cfcl_IOU_array_FP))
+    #                 print("  conf: " + str(conf_cf0001[cf0001ind_towardori_FP]))
+    #                 print("")
+    #                 print(bcolors.BOLD + "Per frame stats: " + bcolors.ENDC)
+    #                 print("  total no of potential extra FP for this frame: " + str(len(cfcl_IOU_array_FP)))
+    #                 print("  IOU range: min[" + str(np.min(cfcl_IOU_array_FP)) + "] max[" + str(
+    #                     np.max(cfcl_IOU_array_FP)) + "]")
+    #                 print("  IOU average : " + str(np.mean(cfcl_IOU_array_FP)))
+    #                 print("  conf range: min[" + str(np.min(conf_cf0001[cf0001ind_towardori_FP])) + "] max[" + str(
+    #                     np.max(conf_cf0001[cf0001ind_towardori_FP])) + "]")
+    #                 print("  conf average: " + str(np.mean(conf_cf0001[cf0001ind_towardori_FP])))
+    #                 print(" ")
+    #                 print(bcolors.BOLD + "Total stats so far: " + bcolors.ENDC)
+    #                 print("  total no of potential extra FP so far: " + str(len(confsofar_FP)))
+    #                 print("  double check: " + str(len(IOUsofar_FP)))
+    #                 print("  IOU range so far: min[" + str(np.min(IOUsofar_FP)) + "] max[" + str(
+    #                     np.max(IOUsofar_FP)) + "]")
+    #                 print("  IOU average so far: " + str(np.mean(IOUsofar_FP)))
+    #                 print("  conf range so far: min[" + str(np.min(confsofar_FP)) + "] max[" + str(
+    #                     np.max(confsofar_FP)) + "]")
+    #                 print("  conf average so far: " + str(np.mean(confsofar_FP)))
+    #                 print(" ")
+    #                 print("no. of total gt annotations: " + str(gtcount))  # number of groundtruth annotations
+    #                 print("no. of total detected high cf: " + str(filteredcount))  # number of detected high conf cf
+    #                 print(bcolors.WARNING + "just remember IOU means the IOU between cf and cl" + bcolors.ENDC)
+    #                 print(bcolors.OKCYAN + "-------------------------------------------------- " + bcolors.ENDC)
+    #                 print(" ")
+    #
+    #         # VISUAL AID SO i DON'T GET CONFUSED AWFHCAWUEHAOUEHAWUIHC@&$&%@(*#&(@*$&&^@$*(#@*&$^@&*(!@#*$&^@@!*(#*$&^@*(!
+    #         # cl ind, IOU array, index left towards original cf
+    #         # clind_IOUmaxn01, cfcl_IOU_array(the amount of overlap, follow clindIOUmax01 so don't worry), cf0001ind_towardori
+
+    # 20th Dec 2022 troubleshoot 001 start---------------------
+    #         img = cv2.imread(os.path.join(imgpath, filename[:-4] + ".jpg"))
+    #         img2 = drawstuff_forgt(gtpath, filename, imgpath, (0, 0, 255))
+    #         img3 = drawstuff_forcf(cf_0001_path_folder, fin_lowcf, np.array((fin_lowcf)), filename, img2, (49, 247, 14))
+    #         cv2.imshow("evwev", img3)
+    #         cv2.waitKey()
+    # 20th Dec 2022 troubleshoot 001 ends----------------------
+    #
+    #         # 22nd November 2022
+    #         # make 5 features
+    #         # for FP
+    #         if len(cfcl_IOU_array_FP) != 0:
+    #             five_features_FP = make_5features(cfcl_IOU_array_FP, conf_cf0001, cf0001ind_towardori_FP,
+    #                                               thearray_cf0001)
+    #         if len(
+    #                 cfcl_IOU_array_FP) == 0:  # make an empty array, later code write condition so it won't append empty array
+    #             five_features_FP = np.array([])
+    #
+    #         # for TP
+    #         if len(cfcl_IOU_array) != 0:
+    #             five_features_TP = make_5features(cfcl_IOU_array, conf_cf0001, cf0001ind_towardori, thearray_cf0001)
+    #         if len(
+    #                 cfcl_IOU_array) == 0:  # make an empty array, later code write condition so it won't append empty array
+    #             five_features_TP = np.array([])
+    #
+    #         # 22nd Nov 2022 [appending it]
+    #         if len(five_features_FP) != 0:
+    #             fiveFeaturesnpy_FP = np.concatenate((fiveFeaturesnpy_FP, five_features_FP), axis=0)
+    #         if len(five_features_TP) != 0:
+    #             print("what is going on")
+    #             print(fiveFeaturesnpy_TP)
+    #             fiveFeaturesnpy_TP = np.concatenate((fiveFeaturesnpy_TP, five_features_TP), axis=0)
+    #
+    #         # # 21st Nov 2022 edit out array to loop to filtered array
+    #         # # # recursively write FP ROI to FP_ROI_folder
+    #         # FP_u, TP_u = get_unique(cfcl_IOU_array_FP, conf_cf0001[cf0001ind_towardori_FP],
+    #         #                         cfcl_IOU_array, conf_cf0001[cf0001ind_towardori], within = True,
+    #         #                         cf0001ind_towardori = cf0001ind_towardori, cf0001ind_towardori_FP = cf0001ind_towardori_FP)
+    #         # if len(FP_u) != 0:
+    #         #     for FP_ind, FP_box in enumerate(boxmat_cf0001[FP_u]):
+    #         #         # transform to int
+    #         #         # 21st Nov check width and height of current FP ROI see if it falls in the category
+    #         #         FP_w = thearray_cf0001[FP_u[FP_ind]][2]
+    #         #         FP_h = thearray_cf0001[FP_u[FP_ind]][3]
+    #         #         if FP_w < 0.3 and FP_h < 0.3:
+    #         #             xyxy = [int(x) for x in FP_box]
+    #         #             x1, y1, x2, y2 = xyxy
+    #         #             cv2.imwrite(os.path.join(FP_ROI_folder_21stNov, filename[:-4] + "_{}".format(FP_ind) + ".jpg"),
+    #         #                         img[y1:y2, x1:x2, :])
+    #         #             afterfilterFP += 1
+    #         #
+    #         # # # recursively write TP ROI to TP_ROI_folder
+    #         # if len(TP_u) != 0:
+    #         #     for TP_ind, TP_box in enumerate(boxmat_cf0001[TP_u]):
+    #         #         # transform to int
+    #         #         # 21st Nov check width and height of current TP ROI see if it falls in the category
+    #         #         TP_w = thearray_cf0001[TP_u[TP_ind]][2]
+    #         #         TP_h = thearray_cf0001[TP_u[TP_ind]][3]
+    #         #         if TP_w < 0.3 and TP_h < 0.3:
+    #         #             xyxy = [int(x) for x in TP_box]
+    #         #             x1, y1, x2, y2 = xyxy
+    #         #             cv2.imwrite(os.path.join(TP_ROI_folder_21stNov, filename[:-4] + "_{}".format(TP_ind) + ".jpg"),
+    #         #                         img[y1:y2, x1:x2, :])
+    #         #             afterfilterTP += 1
+    #
+    # # save five features as an npy file [22nd November 2022]
+    # # np.save("five_features_FP_train.npy", fiveFeaturesnpy_FP[1:])
+    # # np.save("five_features_TP_train.npy", fiveFeaturesnpy_TP[1:])
+    #
+    # print(bcolors.WARNING + "no. of total gt annotations: " + str(gtcount))  # number of groundtruth annotations
+    # print("no. of total detected high cf: " + str(filteredcount) + bcolors.ENDC)  # number of detected high conf cf
+    # print(bcolors.BOLD + "Total stats so far for FP: " + bcolors.ENDC)
+    # print("  total no of potential extra FP so far: " + str(len(confsofar_FP)))
+    # print("  double check: " + str(len(IOUsofar_FP)))
+    # print("  IOU range so far: min[" + str(np.min(IOUsofar_FP)) + "] max[" + str(np.max(IOUsofar_FP)) + "]")
+    # print("  IOU average so far: " + str(np.mean(IOUsofar_FP)))
+    # print("  conf range so far: min[" + str(np.min(confsofar_FP)) + "] max[" + str(np.max(confsofar_FP)) + "]")
+    # print("  conf average so far: " + str(np.mean(confsofar_FP)))
+    # print(" ")
+    # print(bcolors.BOLD + "Total stats so far for TP: " + bcolors.ENDC)
+    # print("  total no of potential extra TP so far: " + str(len(confsofar)))
+    # print("  double check: " + str(len(IOUsofar)))
+    # print("  IOU range so far: min[" + str(np.min(IOUsofar)) + "] max[" + str(np.max(IOUsofar)) + "]")
+    #
+    # print("")
+    # print("  IOU average so far: " + str(np.mean(IOUsofar)))
+    # print("  conf range so far: min[" + str(np.min(confsofar)) + "] max[" + str(np.max(confsofar)) + "]")
+    # print("  conf average so far: " + str(np.mean(confsofar)))
+    # print(bcolors.BOLD + "Total stats so far for FN: " + bcolors.ENDC)
+    # print("  total no of FN: " + str(gtFNcount))
+    # print(" ")
+    # print(" ")
+    # print(" ")
+    # print(print(bcolors.WARNING + "remember variable FNsofardict, dictionary that has filename and"
+    #                               "FN boxmat gt pairs " + bcolors.ENDC))  # number of groundtruth annotations)
+    #
+    # print(" ")
+    # print("after filtered FPTP:")
+    # FP_unique, TP_unique = get_unique(IOUsofar_FP, confsofar_FP, IOUsofar, confsofar, within=False)
+    # print("FP_unique length: " + str(len(FP_unique)))
+    # print("TP_unique length: " + str(len(TP_unique)))
+    # print("")
+    # print(bcolors.MEHGREEN + "after filter FP: " + str(afterfilterFP))
+    # print("after filter TP: " + str(afterfilterTP))
+    #
+    # print("")
+    # print("end of automatictroubleshoot repre")
 def automaticstatistics_maker(cf_0001_path_folder, bestMAPconf, gtpath ):
     txt_list = []
     # txt_list = ["gt_201_frame(105).txt"]
@@ -1215,18 +1117,52 @@ def automaticstatistics_maker(cf_0001_path_folder, bestMAPconf, gtpath ):
     print("total FN: " + str(FN))
     print("total FP: " + str(FP))
     print("total TP: " + str(TP))
+    return TP, FP, FN
 
-p = clusterParams()
-a_clusteroutput(p.a_1, p.a_2, p.a_3, p.a_4, p.a_5, p.a_6, p.repre005_path_folder, p.cloutput_nf,
-                p.imgpath)
-automatictroubleshoot(p.bestMAPconf, p.cf_0001_path_folder, p.cloutput_nf, p.gtpath, p.imgpath)
-automaticstatistics_maker(p.cf_0001_path_folder, p.bestMAPconf, p.gtpath)
+# 22nd Dec 2022 to be run by ablation.py
+# added return values in automatictroubleshoot and run_manager
+# since hyperopt minimizes function, output of automatictroubleshoot does that too
+# for now comment out clusteroutput since I would just want to use the existing output
+cp = clusterParams()
+def run_manager(p):
+    # a_clusteroutput(p.a_1, p.a_2, p.a_3, p.a_4, p.a_5, p.a_6, p.repre005_path_folder, p.cloutput_nf,
+    #                p.imgpath)
+    extra_TP, extra_FP = automatictroubleshoot(p.bestMAPconf, p.cf_0001_path_folder, p.cloutput_nf, p.gtpath, p.imgpath, p.IOU_cutoff,
+                          p.conf_cutoff)
+    TP, FP, FN = automaticstatistics_maker(p.cf_0001_path_folder, p.bestMAPconf, p.gtpath)
+
+    total_TP = extra_TP + TP
+    total_FP = extra_FP + FP
+    total_FN = FN - extra_TP
+    precision = (total_TP) / (total_TP + total_FP ) # TP/(TP + FP)
+    recall =  (total_TP) / (total_TP + total_FN )  # TP/(TP + FN)
+
+    F1 = 2 * (precision * recall) / (precision + recall)#  2 * (Precision * Recall) / (Precision + Recall)
+    original = 0.6711 # original RGB
+    extra_improvement = F1 - original # improvement from original
+    loss = -F1 # hyperopt is a minimization function so the smaller the F1 the better therefore the negative symbol
+
+    return {"loss": loss, "status": STATUS_OK, "F1": F1, "extra TP": extra_TP,
+            "extra FP": extra_FP, "precision": precision, "recall": recall,
+            "extra improvement": extra_improvement}
+
+#p = clusterParams()
+#a_clusteroutput(p.a_1, p.a_2, p.a_3, p.a_4, p.a_5, p.a_6, p.repre005_path_folder, p.cloutput_nf,
+#                p.imgpath)
+#automatictroubleshoot(p.bestMAPconf, p.cf_0001_path_folder, p.cloutput_nf, p.gtpath, p.imgpath, p.IOU_cutoff, p.conf_cutoff)
+
+#automaticstatistics_maker(p.cf_0001_path_folder, p.bestMAPconf, p.gtpath)
 
 # 4th Dec 2022
 # draft: manager_2 is the testing part
 # todo: dynamic naming for after clusteroutput [DONE]
-# todo: writing to YOLOtxt file to be tested with mAP module not available yet
 # todo: cancel the need of gtpath other than to test mAP
+    # todo: make sure modified automatic troubleshoot has the same stats as the old one
+    # todo: (a tiny piece of code to test it at the bottom)
+# todo: write labels immediately instead of going through whole code when there are no low cf nor cl labels
+#  (~ln 698 [no cl ] and ln 716 [no low cf])
+
+# todo: writing to YOLOtxt file to be tested with mAP module not available yet
 # todo: when running test need to create an instruction history file to remember
 #  which parameters were used (exp: weights etc etc..., saved in test run test(n) folders)
 # todo: bestMAPconf, IOU needs to be read from training folder as well
