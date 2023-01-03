@@ -16,6 +16,7 @@ import inspect
 import shutil
 from os import path
 import numpy as np
+import matplotlib.pyplot as plt
 from cluster_fusion.utils import *
 # from utils import *
 import math
@@ -23,6 +24,7 @@ import cv2
 from natsort import natsorted
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from tqdm import tqdm
+import copy
 
 class bcolors:
     HEADER = '\033[95m'
@@ -276,9 +278,14 @@ def a_clusteroutput(a_1, a_2, a_3, a_4, a_5, a_6, filenamepath, cloutput_nf, img
     # make sure there is no cloutput folder during reruns, or else it'll just append to existing txt files
     if os.path.isdir(cloutput_nf) == True:
         shutil.rmtree(cloutput_nf)
+        print(str(cloutput_nf) + " removed")
     print(" ")
     print("def a_clusteroutput: ")
-    for filename in tqdm(txt_list, colour = 'green'):
+    # pbar = tqdm(total=len(txt_list), leave = False, position=1, desc = "inner loop")
+    pbar = tqdm(total=len(txt_list))
+
+    for filename in txt_list:
+        pbar.update()
         path1 = os.path.join(filenamepath, filename)
 
         with open(path1) as file:
@@ -456,64 +463,16 @@ def a_clusteroutput(a_1, a_2, a_3, a_4, a_5, a_6, filenamepath, cloutput_nf, img
                                 towritecoords[0][1]) + " " + str(
                                 towritecoords[0][2]) + " " + str(towritecoords[0][3]) + " " + str(0.5) + "\n"
                             f.write(towriteline)
-def cl_output_stats(gt_filepath, cloutputpath):
-    """
-    calculate extra TP FP (very terribly) in cloutput
-
-    :param gt_filepath:
-    :param cloutputpath:
-    :return: TP, FP
-    """
-    total_TP = 0
-    total_FP = 0
-    txt_list = []
-    #txt_list = ["gt_220_frame(13).txt"]
-    for file in os.listdir(cloutputpath):
-        if file.endswith(".txt"):
-            txt_list.append(file)
-    txt_list = natsorted(txt_list)
-
-    print(" ")
-    print("def cloutput stats: ")
-
-    pbar = tqdm(total = len(txt_list))
-
-    for fi, filename in enumerate(txt_list):
-        pbar.update()
-        cltxt_path = os.path.join(cloutputpath, filename)
-        gttxt_path = os.path.join(gt_filepath, filename)
-
-        # process gt_lines
-        with open(gttxt_path) as gt_file:
-            gt_lines = gt_file.readlines()
-            if len(gt_lines) == 0:
-                # print("no gt lines in " + filename)
-                continue
-            thearray_gt = pro2nparr(gt_lines)
-            boxmat_gt = xywhn2xyxy(thearray_gt)
-        # process cl lines
-        with open(cltxt_path) as cl_file:
-            cl_output_lines = cl_file.readlines()
-            if len(cl_output_lines) == 0:
-                # print("no cl lines in " + filename)
-                continue
-            # process cl_output_lines
-            thearray_cl = pro2nparr(cl_output_lines)
-            boxmat_cl = xywhn2xyxy(thearray_cl)
-        #
-        # print(" ")
-        # print("Filename: " + str(filename))
-        # print("len of the cl_boxmat: " + str(len(boxmat_cl)))
-        # print("len of the gt_boxmat: " + str(len(boxmat_gt)))
-        ioutmatgtcl = def_ioumat(boxmat_cl, boxmat_gt)
-        # print(ioutmatgtcl)
-        # print(np.max(ioutmatgtcl, axis = 0))
-        total_TP += len(np.where(np.max(ioutmatgtcl, axis = 0) > 0.5)[0])
-        total_FP += len(np.where(np.max(ioutmatgtcl, axis = 0) < 0.5)[0])
-    pbar.close()
-    return total_TP, total_FP
-def automatictroubleshoot(bestMAPconf, cf_0001_path_folder, cloutput_nf, gtpath, imgpath, outpath, IOU_cutoff, conf_cutoff):
+    # pbar.close()
+# def a_clusteroutput_noangle(a_1, a_2, a_3, a_4, a_5, a_6, filenamepath, cloutput_nf, imgpath):
+def sortthelines(towritelines):
+    tosortconf = getconf(towritelines)
+    confsortedind = np.argsort(-tosortconf, axis=0)  # negate an array to sort descending
+    sortedwritelines = [towritelines[i] for i in confsortedind.flatten()]
+    return sortedwritelines
+def automatictroubleshoot(bestMAPconf, cf_0001_path_folder, cloutput_nf, gtpath, imgpath, outpath, IOU_cutoff, conf_cutoff, writefile = True ):
     # bloopy1
+
     """
     process output from a_clusteroutput and fuse it with low_conf YOLORGB output
 
@@ -544,159 +503,163 @@ def automatictroubleshoot(bestMAPconf, cf_0001_path_folder, cloutput_nf, gtpath,
     for file in os.listdir(cf_0001_path_folder):
         if file.endswith(".txt"):
             txt_list.append(file)
+
+    # create folder
+    if os.path.isdir(outpath) == True:
+        shutil.rmtree(outpath)
+        print(str(outpath) + " removed")
+    if os.path.isdir(outpath) == False:
+        os.makedirs(outpath)
     print(" ")
     print("automatic troubleshoot: ")
     pbar = tqdm(total = len(txt_list))
     for fi, filename in enumerate(txt_list):
         pbar.update()
-        # print(bcolors.HEADER + "FILENAME: " + str(filename) + bcolors.ENDC)
-        cf_0001_path = os.path.join(cf_0001_path_folder, filename)
+        with open(os.path.join(outpath, filename), 'a') as f:
 
-        # sometimes, there is no cloutput file, so need to create one, that way FN and annotation calculation can continue
-        if os.path.exists(os.path.join(cloutput_nf, filename)) == False:
-            # create empty missing cl file
-            with open(os.path.join(cloutput_nf, filename), 'a') as f:
-                pass
+            # print(bcolors.HEADER + "FILENAME: " + str(filename) + bcolors.ENDC)
+            cf_0001_path = os.path.join(cf_0001_path_folder, filename)
 
-        cl_output_path = os.path.join(cloutput_nf, filename)
-        gt_filepath = os.path.join(gtpath, filename)
+            # sometimes, there is no cloutput file, so need to create one, that way FN and annotation calculation can continue
+            if os.path.exists(os.path.join(cloutput_nf, filename)) == False:
+                # create empty missing cl file
+                with open(os.path.join(cloutput_nf, filename), 'a') as fcep:
+                    pass
 
-        # process gt_lines
-        with open(gt_filepath) as gt_file:
-            gt_lines = gt_file.readlines()
-            if len(gt_lines) == 0:
-                #print("no gt lines in " + filename)
-                continue
-            gtcount += len(gt_lines)
-            thearray_gt = pro2nparr(gt_lines)
-            boxmat_gt = xywhn2xyxy(thearray_gt)
+            cl_output_path = os.path.join(cloutput_nf, filename)
+            gt_filepath = os.path.join(gtpath, filename)
 
-        # process cf_0001_lines
-        with open(cf_0001_path) as cf_file:
-            cf_0001_lines = cf_file.readlines()
-            if len(cf_0001_lines) == 0:
-                #print("no cf 0001 lines in " + filename)
+            # process gt_lines
+            with open(gt_filepath) as gt_file:
+                gt_lines = gt_file.readlines()
+                if len(gt_lines) == 0:
+                    #print("no gt lines in " + filename)
+                    continue
+                gtcount += len(gt_lines)
+                thearray_gt = pro2nparr(gt_lines)
+                boxmat_gt = xywhn2xyxy(thearray_gt)
 
-                ''' '''
-                # 1st October: code block related to FN no. 1
-                # increment gtFNcount since there's no cf
-                gtFNcount += len(gt_lines)
-                FNsofardict[filename] = np.array([])
-                # print("")
-                # print("FN test--------------")
-                # print(len(gt_lines))
-                # print(" ")
-                ''' '''
-                continue
-            thearray_cf0001 = pro2nparr(cf_0001_lines)
-            boxmat_cf0001 = xywhn2xyxy(thearray_cf0001)
-            conf_cf0001 = getconf(cf_0001_lines)
+            # process cf_0001_lines
+            with open(cf_0001_path) as cf_file:
+                cf_0001_lines = cf_file.readlines()
+                if len(cf_0001_lines) == 0:
+                    #print("no cf 0001 lines in " + filename)
 
-        # make sure cl_output_lines isn't empty
-        with open(cl_output_path) as cl_file:
-            cl_output_lines = cl_file.readlines()
+                    ''' '''
+                    # 1st October: code block related to FN no. 1
+                    # increment gtFNcount since there's no cf
+                    gtFNcount += len(gt_lines)
+                    FNsofardict[filename] = np.array([])
+                    # print("")
+                    # print("FN test--------------")
+                    # print(len(gt_lines))
+                    # print(" ")
+                    ''' '''
+                    continue
+                thearray_cf0001 = pro2nparr(cf_0001_lines)
+                boxmat_cf0001 = xywhn2xyxy(thearray_cf0001)
+                conf_cf0001 = getconf(cf_0001_lines)
+
+            # make sure cl_output_lines isn't empty
+            with open(cl_output_path) as cl_file:
+                cl_output_lines = cl_file.readlines()
             if len(cl_output_lines) == 0:
-                # print("no cl lines in " + filename)
+                for lines_up in cf_0001_lines:
+                    f.write(lines_up)
+
 
                 continue
-            # process cl_output_lines
-            thearray_cl = pro2nparr(cl_output_lines)
-            boxmat_cl = xywhn2xyxy(thearray_cl)
+                # process cl_output_lines
+                thearray_cl = pro2nparr(cl_output_lines)
+                boxmat_cl = xywhn2xyxy(thearray_cl)
 
-            # choose highest clusteroutput IOU overlap with low_cf if there are
-            # multiple
-            # but first, need to convert cf and cloutput to boxmat format
+                # choose highest clusteroutput IOU overlap with low_cf if there are
+                # multiple
+                # but first, need to convert cf and cloutput to boxmat format
 
-            filtered_cf0001_ind = np.where(conf_cf0001.ravel() < bestMAPconf)[
-                0]  # index in relation to original cf lines
-            filtered_cf0001_ind_inv = np.where(conf_cf0001.ravel() > bestMAPconf)[
-                0]  # index in relation to original cf lines
+                filtered_cf0001_ind = np.where(conf_cf0001.ravel() < bestMAPconf)[
+                    0]  # index in relation to original cf lines
+                filtered_cf0001_ind_inv = np.where(conf_cf0001.ravel() > bestMAPconf)[
+                    0]  # index in relation to original cf lines
 
-            # if there is no low cf then below code is not needed
-            if len(filtered_cf0001_ind) == 0:
-                # print("no low cf lines")
-                continue
+                # if there is no low cf then below code is not needed
+                if len(filtered_cf0001_ind) == 0:
+                    # print("no low cf lines")
+                    continue
 
-            filteredcount += len(filtered_cf0001_ind_inv)
-            filt_boxmat_cf0001 = boxmat_cf0001[filtered_cf0001_ind]  # boxmat where conf < bestMAPconf
-            filt_boxmat_cf0001_inv = boxmat_cf0001[filtered_cf0001_ind_inv]  # boxmat where conf > bestMAPconf
+                filteredcount += len(filtered_cf0001_ind_inv)
+                filt_boxmat_cf0001 = boxmat_cf0001[filtered_cf0001_ind]  # boxmat where conf < bestMAPconf
+                filt_boxmat_cf0001_inv = boxmat_cf0001[filtered_cf0001_ind_inv]  # boxmat where conf > bestMAPconf
 
+                # [17th Dec 2022] # commented 749 -> 949 [DONE 20TH DEC 2022]
+                #  cancel low cf that has big-ish overlap with high cf in general
+                #  AKA: get low cf that does not overlap with high cf (np.where(np.max(IOUmat == 0)))
+                #  (# this index of (low cf that overlaps with gt > IOU 0.5 [filt_boxmat_cf0001[cfind_IOU05]) that does not overlaps with a high cf
+                #             overlaphi_low_ind = np.where(np.max(IOUmat_cfhicflo, axis=1) == 0)[0])
 
+                # 18th Dec 2022
+                lohicf_iou = def_ioumat(filt_boxmat_cf0001_inv, filt_boxmat_cf0001)
 
-            # todo: [17th Dec 2022] # commented 749 -> 949 [DONE 20TH DEC 2022]
-            #  cancel low cf that has big-ish overlap with high cf in general
-            #  AKA: get low cf that does not overlap with high cf (np.where(np.max(IOUmat == 0)))
-            #  (# this index of (low cf that overlaps with gt > IOU 0.5 [filt_boxmat_cf0001[cfind_IOU05]) that does not overlaps with a high cf
-            #             overlaphi_low_ind = np.where(np.max(IOUmat_cfhicflo, axis=1) == 0)[0])
-            #
-            # 18th Dec 2022
-            lohicf_iou = def_ioumat(filt_boxmat_cf0001_inv, filt_boxmat_cf0001)
-
-            # (var locfxiouhi) index of low cf without any overlap with highcf
-            # to solve np.max problem
-            if len(filt_boxmat_cf0001_inv) == 0: # if there is no high cf, assign ALL low cf to locfxiouhi
-                locfxiouhi = filtered_cf0001_ind # index in relation to original cf line
-            if len(filt_boxmat_cf0001_inv) != 0:
-                locfxiouhi = filtered_cf0001_ind[np.where(np.max(lohicf_iou, axis=0) == 0)[0]] # index in relation to original cf line
+                # (var locfxiouhi) index of low cf without any overlap with highcf
+                # to solve np.max problem
+                if len(filt_boxmat_cf0001_inv) == 0: # if there is no high cf, assign ALL low cf to locfxiouhi
+                    locfxiouhi = filtered_cf0001_ind # index in relation to original cf line
+                if len(filt_boxmat_cf0001_inv) != 0:
+                    locfxiouhi = filtered_cf0001_ind[np.where(np.max(lohicf_iou, axis=0) == 0)[0]] # index in relation to original cf line
 
 
-            #  TODO: [17th Dec 2022] [DONE] [20TH DEC 2022]
-            #   GET IOU overlap between (cl) and (low cf that does not overlap with high cf) at least 0.1 IOU >= 0.1
-            #   remove low cf that share the same cl, higher conf is chosen() == support_box_v1
-            #   there are cases where multiple cl share the same cf, just ignore it, np.unique low cf that's it
+                #  [17th Dec 2022] [DONE] [20TH DEC 2022]
+                #   GET IOU overlap between (cl) and (low cf that does not overlap with high cf) at least 0.1 IOU >= 0.1
+                #   remove low cf that share the same cl, higher conf is chosen() == support_box_v1
+                #   there are cases where multiple cl share the same cf, just ignore it, np.unique low cf that's it
 
-            locfcl_iouMat = def_ioumat(boxmat_cf0001[locfxiouhi], boxmat_cl) # iou betewen cl box and [locf boxes that doesn't overlap with hicf]
+                locfcl_iouMat = def_ioumat(boxmat_cf0001[locfxiouhi], boxmat_cl) # iou betewen cl box and [locf boxes that doesn't overlap with hicf]
 
+                # now need to get the ind of locf that overlaps with cl > 0.1, len() should be line of cf with iou > 0.1
+                ioumat01 = np.where(locfcl_iouMat > IOU_cutoff) # which 2d index has > 0.1
+                locfind = []
+                for clind in np.unique(ioumat01[1]):
+                    h = locfxiouhi[ioumat01[0][np.where(ioumat01[1] == clind)[0]]]
+                    if len(h) > 1:
+                        locfind.append(h[np.argmax(conf_cf0001[h])])
 
-            # now need to get the ind of locf that overlaps with cl > 0.1, len() should be line of cf with iou > 0.1
-            ioumat01 = np.where(locfcl_iouMat > IOU_cutoff) # which 2d index has > 0.1
-            locfind = []
-            for clind in np.unique(ioumat01[1]):
-                h = locfxiouhi[ioumat01[0][np.where(ioumat01[1] == clind)[0]]]
-                if len(h) > 1:
-                    locfind.append(h[np.argmax(conf_cf0001[h])])
+                    if len(h) == 1:
+                        # print(filename)
+                        locfind.append(h[0])
 
-                if len(h) == 1:
-                    # print(filename)
-                    locfind.append(h[0])
+                fin_lowcf = np.unique(np.array(locfind))  # low cf ind in relation to original cf0001
 
-            fin_lowcf = np.unique(np.array(locfind))  # low cf ind in relation to original cf0001
+                if len(fin_lowcf) == 0:
+                    # print("NOTHING EXTRA COMING OUT OF HERE, therefore print as usual")
+                    for lines_up in cf_0001_lines:
+                        f.write(lines_up)
+                    continue
+                if len(fin_lowcf) != 0:
+                    fin_lowcf_confcutoff = fin_lowcf[
+                        np.where(conf_cf0001[fin_lowcf] > conf_cutoff)[0]]  # final lo cf ind in relation to orifinal cf0001
 
-            # create folder
-            if os.path.isdir(outpath) == True:
-                shutil.rmtree(outpath)
-            if os.path.isdir(outpath) == False:
-                os.makedirs(outpath)
-
-            if os.path.exists(os.path.join(outpath, filename)) == False:
-                # create empty missing fu file
-                with open(os.path.join(outpath, filename), 'a') as f:
-                    if len(fin_lowcf) == 0:
-                        # print("NOTHING EXTRA COMING OUT OF HERE")
+                    # TPFP calculation compared with gt
+                    if len(fin_lowcf_confcutoff) == 0:
+                        # print("NO CONF HIGHER THAN SET CONF NOTHING EXTRA COMING OUT!")
                         continue
-                    if len(fin_lowcf) != 0:
-                        fin_lowcf_confcutoff = fin_lowcf[
-                            np.where(conf_cf0001[fin_lowcf] > conf_cutoff)[0]]  # final lo cf ind in relation to orifinal cf0001
+                    if len(fin_lowcf_confcutoff) !=0:
 
-                        # bloopy2 [27th Dec 2022]
-                        # var cf_0001_lines
-                        # solution: loop through index, change the conf
-                        # rearrange the conf's index,
-                        # rearrange conf index
-                        # rearrange cf0001_lines and create towrite_cf0001lines
-                        #input("Press Enter")
+                        # write to output file [31st Dec 2022]
+                        cf_0001_lines_up = copy.deepcopy(cf_0001_lines)
+                        for updi in fin_lowcf_confcutoff:
+                            bl = thearray_cf0001[updi] # just a shorter variable name for thearray_cf0001[updi]
+                            cf_0001_lines_up[updi] = "0 " + str(bl[0]) + " " + str(bl[1]) + " " + str(bl[2]) + " " + str(bl[3]) + " 0.9\n"
+                            # print(cf_0001_lines_up[updi])
 
+                        # sort the lines to write
+                        sortedwritelines = sortthelines(cf_0001_lines_up)
+                        for lines_up in sortedwritelines:
+                            f.write(lines_up)
 
-
-                        # TPFP calculation compared with gt
-                        if len(fin_lowcf_confcutoff) == 0:
-                            # print("NO CONF HIGHER THAN SET CONF NOTHING EXTRA COMING OUT!")
-                            continue
-                        if len(fin_lowcf_confcutoff) !=0:
-                            gtxtracf_iou = np.max(def_ioumat(boxmat_gt, boxmat_cf0001[fin_lowcf_confcutoff]),
-                                                  axis=0)  # gt and extra inference iou mat
-                            afterfilterTP += len(np.where(gtxtracf_iou > 0.5)[0])
-                            afterfilterFP += len(np.where(gtxtracf_iou < 0.5)[0])
+                        gtxtracf_iou = np.max(def_ioumat(boxmat_gt, boxmat_cf0001[fin_lowcf_confcutoff]),
+                                              axis=0)  # gt and extra inference iou mat
+                        afterfilterTP += len(np.where(gtxtracf_iou > 0.5)[0])
+                        afterfilterFP += len(np.where(gtxtracf_iou < 0.5)[0])
     pbar.close()
 
     # bloopy1 [27th Dec 2022]
@@ -711,7 +674,7 @@ def automatictroubleshoot(bestMAPconf, cf_0001_path_folder, cloutput_nf, gtpath,
     # f.write(towriteline)
 
     return afterfilterTP, afterfilterFP
-def automaticstatistics_maker(cf_0001_path_folder, bestMAPconf, gtpath ):
+def automaticstatistics_maker(cf_0001_path_folder, bestMAPconf, gtpath):
     """
     :param cf_0001_path_folder:
     :param bestMAPconf:
@@ -751,16 +714,16 @@ def automaticstatistics_maker(cf_0001_path_folder, bestMAPconf, gtpath ):
         with open(cf_0001_path) as cf_file:
             cf_0001_lines = cf_file.readlines()
             if len(cf_0001_lines) == 0:
-                print("no cf 0001 lines in " + filename)
+                # print("no cf 0001 lines in " + filename)
 
                 ''' '''
                 # 1st October: code block related to FN no. 1
                 # increment gtFNcount since there's no cf
                 FN += len(gt_lines)
-                print("")
-                print("FN test--------------")
-                print(len(gt_lines))
-                print(" ")
+                # print("")
+                # print("FN test--------------")
+                # print(len(gt_lines))
+                # print(" ")
                 ''' '''
                 continue
         thearray_cf0001 = pro2nparr(cf_0001_lines)
@@ -857,116 +820,152 @@ def F1_maker_clstats(clTP,clFP, TP, FP):
     recall = clTP / (clTP + clFN)
     F1 = 2 * (precision * recall) / (precision + recall)
     return F1
+def get_hyperoptgraphs(trials_result, figsavepath = './hyperopt_3f.jpg'):
+    keys = trials_result[0].keys()
+    iter = len(trials_result)
+    keylen = len(keys)
+    minind = np.argmin([sub['loss'] for sub in trials_result])
+    plt.figure(figsize=(25, 12))
+    plt.subplots_adjust(hspace=0.4)
+    for i, k in enumerate(keys):
+        keylistn = [subkey[k] for subkey in trials_result]
+        roundup = math.ceil(keylen / 4)
+        plt.subplot(roundup, 4, i + 1, label=k, aspect="auto")
+        plt.title(k)
+        plt.xlabel("iter")
+        plt.scatter(range(iter), keylistn, s=1)
+        plt.scatter(minind, keylistn[minind], s=1, c='r')
 
+        # check folder exist, save graph and txt file
+        if os.path.isdir(figsavepath) == True:
+            shutil.rmtree(figsavepath)
+        if os.path.isdir(figsavepath) == False:
+            os.mkdir(figsavepath)
+        with open(os.path.join(figsavepath, "trials_full.txt"), 'a') as f:
+            for lines in trials_result:
+                f.write(str(lines) + "\n")
+        with open(os.path.join(figsavepath, "best.txt"), 'a') as b_f:
+            b_f.write(str(trials_result[minind]) + "\n")
+            b_f.write("minimum loss reacher at {} iteration \n".format(minind))
+            b_f.write("best loss: " + str(np.min([sub['loss'] for sub in trials_result])))
+
+        plt.savefig(os.path.join(figsavepath, "hyperopt.jpg"), dpi=199)
+    print("figure saved to {}".format(figsavepath))
+    plt.show()
 
 # 22nd Dec 2022 to be run by ablation.py
 # added return values in automatictroubleshoot and run_manager
 # since hyperopt minimizes function, output of automatictroubleshoot does that too
 def optimize_parameter(opt):
     trials = Trials()
-    # ho_outpath = opt.output_path # [27th December 2022 still not sure what to output here]
+    cp = clusterParams()
+    cp.imgpath = opt.imgpath
+    cp.cloutput_nf = opt.cloutput
+    cp.cf_0001_path_folder = opt.cf0001output
+    cp.repre005_path_folder = opt.repre005
+    cp.gtpath = opt.gtpath
+    cp.bestMAPconf = opt.bestMAPconf
+    cp.fusionoutput = opt.fusion_outputpath
+    ho_outpath = opt.output_path  # [27th December 2022 still not sure what to output here]
+    max_eval = opt.maxeval
     def optim_function(d):
-
-        cp = clusterParams()
-        cp.imgpath = opt.imgpath
-        cp.cloutput_nf = opt.cloutput
-        cp.cf_0001_path_folder = opt.cf0001output
-        cp.repre005_path_folder = opt.repre005
-        cp.gtpath = opt.gtpath
-        cp.bestMAPconf = opt.bestMAPconf
-        cp.fusionoutput = opt.fusion_ouputpath
-
-
         a_clusteroutput(d['a_1'], d['a_2'], d['a_3'], d['a_4'], d['a_5'], d['a_6'],
                         cp.repre005_path_folder, cp.cloutput_nf,cp.imgpath)
         if opt.fusion_module == True:   # if fusion module is used
+            print("fusion is used")
             extraTP, extraFP = automatictroubleshoot(cp.bestMAPconf, cp.cf_0001_path_folder, cp.cloutput_nf, cp.gtpath,
                                                      cp.imgpath, cp.fusionoutput, d['IOU_cutoff'], d['conf_cutoff'])
-        if opt.fusion_module ==  False: # if no fusion module is needed, calculate cloutput box stats
-            extraTP, extraFP = cl_output_stats(cp.gtpath, cp.cloutput_nf)
+        else: # if no fusion module is needed, calculate cloutput box stats
+            extraTP, extraFP, _ = automaticstatistics_maker(cp.cloutput_nf, cp.bestMAPconf, cp.gtpath)
 
 
         TP, FP, FN = automaticstatistics_maker(cp.cf_0001_path_folder, cp.bestMAPconf, cp.gtpath)
         loss, F1, F1_extraimprovement = F1_maker(extraTP, TP, extraFP, FP, FN)
 
         if opt.fusion_module == True:
-            return {"loss": loss, "status": STATUS_OK, "a_1" : d['a_1'], "a_2" : d['a_2'],
+            return {"loss": loss, "status": STATUS_OK, "F1": F1, "F1_extra improvement": F1_extraimprovement,
+                    "a_1" : d['a_1'], "a_2" : d['a_2'],
                     "a_3": d['a_3'], "a_4" : d['a_4'], "a_5" : d['a_5'], "a_6" : d['a_6'],
                     "IOU_cutoff" : d['IOU_cutoff'], "conf_cutoff" : d['conf_cutoff']}
         if opt.fusion_module == False:
-            return {"loss": loss, "status": STATUS_OK, "a_1": d['a_1'], "a_2": d['a_2'],
+            return {"loss": loss, "status": STATUS_OK, "F1": F1, "F1_extra improvement": F1_extraimprovement,
+                    "a_1": d['a_1'], "a_2": d['a_2'],
                     "a_3": d['a_3'], "a_4": d['a_4'], "a_5": d['a_5'], "a_6": d['a_6']}
 
     # space definition
     if opt.fusion_module == True:
         space = {'a_1': hp.uniform('a_1', 0, 1), 'a_2': hp.uniform('a_2', 0, 1), 'a_3': hp.uniform('a_3', 0, 200),
-                 'a_4': hp.uniform('a_4', 200, 3000), 'a_5': hp.uniform('a_5', 0.4, 0.1),
+                 'a_4': hp.uniform('a_4', 200, 3000), 'a_5': hp.uniform('a_5', 0.1, 0.4),
                  'a_6': hp.uniform('a_6', 0, 0.4),
                  'IOU_cutoff': hp.uniform('IOU_cutoff', 0, 1), 'conf_cutoff': hp.uniform('conf_cutoff', 0, 0.5)}
     if opt.fusion_module == False:
         space = {'a_1': hp.uniform('a_1', 0, 1), 'a_2': hp.uniform('a_2', 0, 1), 'a_3': hp.uniform('a_3', 0, 200),
-                 'a_4': hp.uniform('a_4', 200, 3000), 'a_5': hp.uniform('a_5', 0.4, 0.1),
+                 'a_4': hp.uniform('a_4', 200, 3000), 'a_5': hp.uniform('a_5', 0.1, 0.4),
                  'a_6': hp.uniform('a_6', 0, 0.4)}
     best = fmin(fn=optim_function,
                 space=space,
                 algo=tpe.suggest,
-                max_evals=3,
-                trials=trials)
+                max_evals= max_eval,
+                trials=trials,
+                show_progressbar=False)
+
     print(best)
-    # probably need to output graphs and the path is ho_outputpath
-    # return {"loss": loss, "status": STATUS_OK, "F1": F1, "extra TP": extra_TP,
-    #         "extra FP": extra_FP, "precision": precision, "recall": recall,
-    #         "extra improvement": extra_improvement}
+    trials_result = trials.results
+    get_hyperoptgraphs(trials_result, figsavepath=ho_outpath)  #save graphs and txt files
 
-# if __name__ == '__main__':
-#     parser = argparse.ArgumentParser(prog='optimize_param.py')
-#     parser.add_argument('--fusion-module', action='store_true', help='add fusion module to run')
-#     parser.add_argument('--bestMAPconf', type=int, default=0.541,
-#                         help='best mAP conf from training result')
-#     parser.add_argument('--cloutput', type=str, default = '../Data/Runs/Test/test_1/cloutput', help = 'path to cl output')
-#     parser.add_argument('--cf0001output', type=str, default= '../Data/Runs/Test/test_1/RGB_labels/labels', help='path to cf0001 output')
-#     parser.add_argument('--gtpath', type=str, default='D:/f4kBIG/fishclef_2015_withval_v3/labels/f4kBIG_test_v3',
-#                         help='path to ground truth')
-#     parser.add_argument('--imgpath', type=str, default='D:/f4kBIG/fishclef_2015_withval_v3/images/f4kBIG_test_v3',
-#                         help='path to images')
-#     parser.add_argument('--output_path', type=str, default='../Data/Runs/Test/test_1/opt_param/',
-#                         help='pathwhereTrialsoutput+graph is stored')
-#     parser.add_argument('--repre005', type=str, default='../Data/Runs/Test/test_1/Repre_labels/labels/',
-#                         help='pathwhere representation labels are stored')
-#     parser.add_argument('--fusion_outputpath', type=str, default="../Data/Runs/Test/test_1/finalresult",
-#                         help='pathwhere fusionoutput are stored to be sent to Linux mapCalc.py')
-#
-#     opt = parser.parse_args()
-#     optimize_parameter(opt)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(prog='optimize_param.py')
+    parser.add_argument('--fusion-module', default= True, action='store_true', help='add fusion module to run')
+    parser.add_argument('--bestMAPconf', type=int, default=0.541,
+                        help='best mAP conf from training result')
+    parser.add_argument('--cloutput', type=str, default = '../Data/Runs/Test/test_0/cloutput', help = 'path to cl output')
+    parser.add_argument('--cf0001output', type=str, default= '../Data/Runs/Test/test_0/RGB_labels/labels', help='path to cf0001 output')
+    parser.add_argument('--gtpath', type=str, default='D:/f4kBIG/fishclef_2015_withval_v3/labels/f4kBIG_test_v3',
+                        help='path to ground truth')
+    parser.add_argument('--imgpath', type=str, default='D:/f4kBIG/fishclef_2015_withval_v3/images/f4kBIG_test_v3',
+                        help='path to images')
+    parser.add_argument('--repre005', type=str, default='../Data/Runs/Test/test_0/Repre_labels_3f/labels/',
+                        help='pathwhere representation labels are stored')
+    parser.add_argument('--fusion_outputpath', type=str, default="../Data/Runs/Test/test_1/finalresult",
+                        help='pathwhere fusionoutput are stored to be sent to Linux mapCalc.py')
+    parser.add_argument('--maxeval', type=int, default=2,
+                        help='maximum number of evaluation')
+    parser.add_argument('--output_path', type=str, default='../Data/Runs/Test/test_1/opt_param_3f/',
+                        help='pathwhereTrialsoutput+graph is stored')
+
+    opt = parser.parse_args()
+    optimize_parameter(opt)
+
+# p = clusterParams()
+# p.cloutput_nf = "../Data/Runs/Test/test_0/cloutput"
+# p.fusionoutput = "../Data/Runs/Test/test_1/fusionoutput_5f"
+# extraTP, extraFP = automatictroubleshoot(p.bestMAPconf, p.cf_0001_path_folder, p.cloutput_nf, p.gtpath, p.imgpath, p.fusionoutput, p.IOU_cutoff, p.conf_cutoff)
+
+# p.repre005_path_folder = "../Data/Runs/Test/test_0/Repre_labels_5f/labels"
+# p.cloutput_nf = "../Data/Runs/Test/test_0/cloutput_5f"
+# # #
+# a_clusteroutput(p.a_1, p.a_2, p.a_3, p.a_4, p.a_5, p.a_6, p.repre005_path_folder, p.cloutput_nf,
+#                p.imgpath)
+# clTP, clFP, clFN = automaticstatistics_maker(p.cloutput_nf, 0.4, p.gtpath)
+# extraTP, extraFP = automatictroubleshoot(p.bestMAPconf, p.cf_0001_path_folder, p.cloutput_nf, p.gtpath, p.imgpath, p.fusionoutput, p.IOU_cutoff, p.conf_cutoff)
+# TP, FP, FN = automaticstatistics_maker(p.cf_0001_path_folder, p.bestMAPconf, p.gtpath)
+# print(" ")
+# print("original RGB only stats: ")
+# print("TP: " + str(TP))
+# print("FP: " + str(FP))
+# print("FN: " + str(FN))
+# print("directly after cluster_module stats: ")
+# print("cl TP: " + str(clTP))
+# print("cl FP: " + str(clFP))
+# print("cl F1: " + str(F1_maker_clstats(clTP, clFP, TP, FP)))
+# print("after fusion, extra TP FP:")
+# print("extra TP: " + str(extraTP))
+# print("extra FP: " + str(extraFP))
+# loss, F1, F1_extra_improvement = F1_maker(extraTP, TP, extraFP, FP, FN)
+# print("F1: " + str(F1))
+# print("F1 extra improvement: " + str(F1_extra_improvement))
 
 
-
-
-p = clusterParams()
-p.repre005_path_folder = "../Data/Runs/Test/test_0/Repre_labels_3f/labels"
-p.cloutput_nf = "../Data/Runs/Test/test_0/cloutput_3f"
-a_clusteroutput(p.a_1, p.a_2, p.a_3, p.a_4, p.a_5, p.a_6, p.repre005_path_folder, p.cloutput_nf,
-               p.imgpath)
-clTP, clFP = cl_output_stats(p.gtpath, p.cloutput_nf)
-extraTP, extraFP = automatictroubleshoot(p.bestMAPconf, p.cf_0001_path_folder, p.cloutput_nf, p.gtpath, p.imgpath, p.fusionoutput, p.IOU_cutoff, p.conf_cutoff)
-TP, FP, FN = automaticstatistics_maker(p.cf_0001_path_folder, p.bestMAPconf, p.gtpath)
-print(" ")
-print("original RGB only stats: ")
-print("TP: " + str(TP))
-print("FP: " + str(FP))
-print("FN: " + str(FN))
-print("directly after cluster_module stats: ")
-print("cl TP: " + str(clTP))
-print("cl FP: " + str(clFP))
-print("cl F1: " + str(F1_maker_clstats(clTP, clFP, TP, FP)))
-print("after fusion, extra TP FP:")
-print("extra TP: " + str(extraTP))
-print("extra FP: " + str(extraFP))
-loss, F1, F1_extra_improvement = F1_maker(extraTP, TP, extraFP, FP, FN)
-print("F1: " + str(F1))
-print("F1 extra improvement: " + str(F1_extra_improvement))
-
-#print(cl_output_stats(p.gtpath, p.cloutput_nf))
 
 
 # 4th Dec 2022
